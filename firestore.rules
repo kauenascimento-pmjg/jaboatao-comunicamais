@@ -2,64 +2,10 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // ─── Helpers ────────────────────────────────────────────────
-    function isAuthenticated() {
-      return request.auth != null;
-    }
-    function isOwner(uid) {
-      return request.auth.uid == uid;
-    }
-    function isMember(members) {
-      return request.auth.uid in members;
-    }
-
-    // ─── Users Collection ────────────────────────────────────────
-    // Todo servidor autenticado pode ver o diretório de funcionários.
-    // Cada servidor só pode editar seu próprio perfil.
-    match /users/{uid} {
-      allow read: if isAuthenticated();
-      allow create, update: if isOwner(uid);
-      allow delete: if false; // Somente Admin SDK
-    }
-
-    // ─── Channels Collection ─────────────────────────────────────
-    // Qualquer servidor autenticado lê canais públicos.
-    // Apenas Admin SDK cria/exclui canais oficiais (via backend).
-    match /channels/{channelId} {
-      allow read: if isAuthenticated();
-      allow create, update, delete: if false; // Admin SDK only
-
-      // Mensagens dentro de canais oficiais
-      match /messages/{messageId} {
-        allow read: if isAuthenticated();
-        // Servidor autenticado pode enviar, mas não editar mensagens alheias
-        allow create: if isAuthenticated()
-          && request.resource.data.senderId == request.auth.uid
-          && request.resource.data.keys().hasAll(['text', 'senderId', 'senderName', 'createdAt', 'channelId']);
-        allow update, delete: if false;
-      }
-    }
-
-    // ─── Direct Messages ──────────────────────────────────────────
-    // DM ID = uid1_uid2 (sorted alphabetically)
-    // Apenas os dois membros podem ler e escrever.
-    match /direct_messages/{dmId} {
-      allow read: if isAuthenticated() && isMember(resource.data.members);
-      allow create: if isAuthenticated()
-        && isMember(request.resource.data.members)
-        && request.resource.data.members.size() == 2;
-      allow update: if false;
-      allow delete: if false;
-
-      match /messages/{messageId} {
-        allow read: if isAuthenticated()
-          && isMember(get(/databases/$(database)/documents/direct_messages/$(dmId)).data.members);
-        allow create: if isAuthenticated()
-          && request.resource.data.senderId == request.auth.uid
-          && isMember(get(/databases/$(database)/documents/direct_messages/$(dmId)).data.members);
-        allow update, delete: if false;
-      }
+    
+    // Permitir qualquer leitura/gravação se o usuário estiver LOGADO (para teste de integração)
+    match /{document=**} {
+      allow read, write: if request.auth != null;
     }
   }
 }

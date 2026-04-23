@@ -23,7 +23,7 @@ Para que o login funcione completamente, configure as credenciais do Firebase Ad
 
 ```bash
 # Obtenha em: Firebase Console → Project Settings → Service Accounts → Generate new private key
-FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@pmjg-apps-dev.iam.gserviceaccount.com
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@pmjg-apps-hmol.iam.gserviceaccount.com
 FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nXXXXXX...\nXXXXXX\n-----END PRIVATE KEY-----\n"
 ```
 
@@ -32,7 +32,7 @@ FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nXXXXXX...\nXXXXXX\n-----END P
 ### Como Obter as Credenciais do Firebase
 
 1. Acesse [Firebase Console](https://console.firebase.google.com/)
-2. Selecione o projeto `pmjg-apps-dev`
+2. Selecione o projeto `pmjg-apps-hmol`
 3. Vá para **Project Settings** (ícone de engrenagem)
 4. Abra a aba **Service Accounts**
 5. Clique em **Generate new private key**

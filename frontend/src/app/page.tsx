@@ -1,7 +1,25 @@
+'use client';
+
 import React from 'react';
 import Link from 'next/link';
+import { useTheme } from '@/components/providers/ThemeProvider';
+import { Moon, Sun } from 'lucide-react';
+import { useAuthStore } from '@/lib/authStore';
+import { useRouter } from 'next/navigation';
+import { useEffect } from 'react';
 
 export default function Home() {
+  const { theme, toggle } = useTheme();
+  const { user } = useAuthStore();
+  const router = useRouter();
+
+  // Redirecionar para o dashboard se já estiver logado (evita ficar preso na home em produção)
+  useEffect(() => {
+    if (user) {
+      router.push('/dashboard');
+    }
+  }, [user, router]);
+
   return (
     <main className="min-h-screen bg-[var(--bg)] flex flex-col relative overflow-hidden">
       
@@ -25,12 +43,22 @@ export default function Home() {
           </div>
         </div>
         
-        <Link 
-          href="/login" 
-          className="bg-brand-blue text-white font-display font-bold text-xs uppercase tracking-widest px-6 py-3 shadow-brutal-sm shadow-brand-gold hover:shadow-none translate-y-[-2px] hover:translate-y-0 transition-all"
-        >
-          Entrar
-        </Link>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={toggle}
+            className="p-3 bg-[var(--surface)] border-2 border-brand-blue shadow-brutal-sm shadow-brand-gold hover:shadow-none transition-all"
+            aria-label="Alternar Tema"
+          >
+            {theme === 'light' ? <Moon size={18} className="text-brand-blue-text" /> : <Sun size={18} className="text-brand-gold" />}
+          </button>
+          
+          <Link 
+            href="/login" 
+            className="bg-brand-blue text-white font-display font-bold text-xs uppercase tracking-widest px-6 py-3 shadow-brutal-sm shadow-brand-gold hover:shadow-none translate-y-[-2px] hover:translate-y-0 transition-all"
+          >
+            Entrar
+          </Link>
+        </div>
       </header>
 
       {/* Hero Section */}
@@ -46,7 +74,7 @@ export default function Home() {
 
             <h2 className="font-display text-5xl md:text-7xl lg:text-8xl font-extrabold text-brand-blue-text leading-[0.9] tracking-tighter">
               A FORÇA DA NOSSA<br />
-              <span className="bg-brand-gold text-brand-blue inline-block px-4">GENTE.</span>
+              <span className="bg-brand-gold text-brand-blue-text inline-block px-4">GENTE.</span>
             </h2>
 
             <p className="font-sans text-base lg:text-xl text-[var(--muted)] max-w-xl leading-relaxed">
@@ -61,9 +89,14 @@ export default function Home() {
               >
                 Acessar Portal
               </Link>
-              <button className="border-4 border-brand-blue text-brand-blue-text px-10 py-5 font-display font-bold text-sm uppercase tracking-widest hover:bg-brand-blue/5 transition-all">
+              <a 
+                href="https://jaboatao.pe.gov.br" 
+                target="_blank" 
+                rel="noopener noreferrer"
+                className="border-4 border-brand-blue text-brand-blue-text px-10 py-5 font-display font-bold text-sm uppercase tracking-widest hover:bg-brand-blue/5 transition-all flex items-center justify-center"
+              >
                 Conhecer Projeto
-              </button>
+              </a>
             </div>
 
             {/* Tags representativas */}
@@ -94,7 +127,7 @@ export default function Home() {
                    <p className="text-sm font-sans">Bom dia, equipe! O relatório da Secretaria de Saúde já está disponível no canal oficial.</p>
                  </div>
                  <div className="bg-brand-gold/10 border-2 border-brand-gold p-4 mr-12">
-                   <p className="text-sm font-sans text-brand-blue font-semibold">Recebido! Vamos analisar agora mesmo. #ComunicaJaboatão</p>
+                    <p className="text-sm font-sans text-brand-blue-text font-semibold">Recebido! Vamos analisar agora mesmo. #ComunicaJaboatão</p>
                  </div>
                </div>
 

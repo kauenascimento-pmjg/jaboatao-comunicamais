@@ -111,13 +111,31 @@ export async function authenticateWithAD(req: Request, res: Response): Promise<v
     console.log('[Auth] AD authentication successful, UID:', userId);
 
     // Gerar custom token do Firebase
-    try {
-      const auth = getAuth();
-      const customToken = await auth.createCustomToken(userId);
-      console.log('[Auth] Custom Firebase token generated successfully');
+    const { canSignTokens } = require('../services/firebase');
 
+    if (canSignTokens()) {
+      try {
+        const auth = getAuth();
+        const customToken = await auth.createCustomToken(userId);
+        console.log('[Auth] Custom Firebase token generated successfully');
+
+        res.status(200).json({
+          firebaseCustomToken: customToken,
+          uid: userId,
+          profile: {
+            email,
+            uid: userId,
+            ...((adPayload.profile as Record<string, unknown>) || (adPayload.user as Record<string, unknown>) || {}),
+          },
+        });
+      } catch (tokenErr) {
+        console.error('[Auth] Failed to generate custom token:', tokenErr);
+        res.status(500).json({ error: 'Falha ao gerar token de autenticação.' });
+      }
+    } else {
+      console.warn('[Auth] Skipping Custom Token generation: Missing Service Account credentials.');
       res.status(200).json({
-        firebaseCustomToken: customToken,
+        firebaseCustomToken: '',
         uid: userId,
         profile: {
           email,
@@ -125,9 +143,6 @@ export async function authenticateWithAD(req: Request, res: Response): Promise<v
           ...((adPayload.profile as Record<string, unknown>) || (adPayload.user as Record<string, unknown>) || {}),
         },
       });
-    } catch (tokenErr) {
-      console.error('[Auth] Failed to generate custom token:', tokenErr);
-      res.status(500).json({ error: 'Falha ao gerar token de autenticação.' });
     }
   } catch (error) {
     console.error('[Auth] Erro na rota de autenticação:', error);

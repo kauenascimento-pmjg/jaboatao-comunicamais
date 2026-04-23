@@ -13,13 +13,14 @@ import { useRouter } from 'next/navigation';
 import {
   getChannels, subscribeToMessages, sendMessage,
   getAllUsers, getOrCreateDm, subscribeToDmMessages, sendDmMessage,
+  seedDefaultChannels,
   Channel, Message, UserProfile,
 } from '@/lib/chatService';
 
 type ActiveView = { type: 'channel'; id: string; name: string } | { type: 'dm'; id: string; name: string; otherUid: string };
 
 export default function ChatDashboard() {
-  const { user } = useAuthStore();
+  const { user, setUser } = useAuthStore();
   const { theme, toggle } = useTheme();
   const router = useRouter();
   
@@ -37,13 +38,21 @@ export default function ChatDashboard() {
 
   // Load channels and users
   useEffect(() => {
-    getChannels().then(data => {
+    const loadData = async () => {
+      // Seed default channels if Firestore is empty (first time)
+      await seedDefaultChannels();
+      
+      const data = await getChannels();
       setChannels(data);
       if (data.length > 0 && !activeView) {
         setActiveView({ type: 'channel', id: data[0].id, name: data[0].name });
       }
-    });
-    getAllUsers().then(setUsers);
+      
+      const usersList = await getAllUsers();
+      setUsers(usersList);
+    };
+    loadData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Subscribe to messages
@@ -95,6 +104,7 @@ export default function ChatDashboard() {
 
   const logout = async () => {
     await signOut(auth);
+    setUser(null); // Limpa o estado persistente do Zustand
     router.push('/');
   };
 
@@ -113,7 +123,7 @@ export default function ChatDashboard() {
         <div className="flex items-center gap-3">
           <button 
             onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            className="lg:hidden p-2 text-brand-blue hover:bg-brand-blue/5 transition-colors"
+            className="lg:hidden p-2 text-brand-blue-text hover:bg-brand-blue/5 transition-colors"
           >
             <Menu size={20} />
           </button>
@@ -129,7 +139,7 @@ export default function ChatDashboard() {
         </div>
 
         <div className="flex items-center gap-4">
-          <button onClick={toggle} className="p-2 text-brand-blue/60 hover:text-brand-blue transition-colors">
+          <button onClick={toggle} className="p-2 text-brand-blue-text/60 hover:text-brand-blue-text transition-colors">
             {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
           </button>
           
@@ -165,8 +175,8 @@ export default function ChatDashboard() {
         `}>
           {/* Mobile Overlay Header */}
           <div className="lg:hidden flex items-center justify-between p-4 border-b-2 border-brand-blue/5">
-            <span className="font-display font-extrabold text-brand-blue uppercase text-xs">Menu de Navegação</span>
-            <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-brand-blue/40">
+            <span className="font-display font-extrabold text-brand-blue-text uppercase text-xs">Menu de Navegação</span>
+            <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-brand-blue-text/40">
               <X size={18} />
             </button>
           </div>
@@ -176,7 +186,7 @@ export default function ChatDashboard() {
             <button
               onClick={() => setSidePanel('channels')}
               className={`py-4 font-display font-bold text-[10px] uppercase tracking-[0.2em] transition-colors flex flex-col items-center gap-1 ${
-                sidePanel === 'channels' ? 'bg-brand-blue text-white shadow-inner shadow-brand-gold/30' : 'text-brand-blue/40 hover:bg-brand-blue/5'
+                sidePanel === 'channels' ? 'bg-brand-blue text-white shadow-inner shadow-brand-gold/30' : 'text-brand-blue-text/40 hover:bg-brand-blue/5'
               }`}
             >
               <Hash size={14} /> Canais
@@ -184,7 +194,7 @@ export default function ChatDashboard() {
             <button
               onClick={() => setSidePanel('directory')}
               className={`py-4 font-display font-bold text-[10px] uppercase tracking-[0.2em] transition-colors flex flex-col items-center gap-1 ${
-                sidePanel === 'directory' ? 'bg-brand-blue text-white shadow-inner shadow-brand-gold/30' : 'text-brand-blue/40 hover:bg-brand-blue/5'
+                sidePanel === 'directory' ? 'bg-brand-blue text-white shadow-inner shadow-brand-gold/30' : 'text-brand-blue-text/40 hover:bg-brand-blue/5'
               }`}
             >
               <Users size={14} /> Servidores
@@ -214,11 +224,11 @@ export default function ChatDashboard() {
                   onClick={() => { setActiveView({ type: 'channel', id: channel.id, name: channel.name }); setIsMobileMenuOpen(false); }}
                   className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-all border-l-4 ${
                     activeView?.type === 'channel' && activeView.id === channel.id
-                      ? 'bg-brand-blue/5 border-brand-blue text-brand-blue font-bold shadow-sm'
-                      : 'border-transparent text-brand-blue/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
+                      ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
+                      : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
                   }`}
                 >
-                  <Hash size={14} className="opacity-40" />
+                  <Hash size={14} className="opacity-60" />
                   <span className="text-xs font-bold uppercase tracking-wider truncate">{channel.name}</span>
                 </button>
               ))
@@ -229,18 +239,18 @@ export default function ChatDashboard() {
                   onClick={() => openDm(u)}
                   className={`w-full flex items-center gap-3 px-3 py-3 text-left transition-all border-l-4 ${
                     activeView?.type === 'dm' && activeView.otherUid === u.uid
-                      ? 'bg-brand-blue/5 border-brand-blue text-brand-blue font-bold shadow-sm'
-                      : 'border-transparent text-brand-blue/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
+                      ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
+                      : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
                   }`}
                 >
-                  <div className="w-8 h-8 bg-brand-gold/20 flex items-center justify-center text-brand-blue font-display font-bold text-[10px]">
+                  <div className="w-8 h-8 bg-brand-gold/20 flex items-center justify-center text-brand-blue-text font-display font-bold text-[10px]">
                     {(u.displayName || u.email || '?')[0].toUpperCase()}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-bold truncate">{u.displayName || u.email}</p>
-                    <p className="text-[10px] opacity-40 uppercase font-bold tracking-tighter">{u.department || 'Servidor'}</p>
+                    <p className="text-[10px] opacity-60 uppercase font-bold tracking-tighter">{u.department || 'Servidor'}</p>
                   </div>
-                  <ChevronRight size={12} className="opacity-20" />
+                  <ChevronRight size={12} className="opacity-40" />
                 </button>
               ))
             )}
@@ -290,7 +300,7 @@ export default function ChatDashboard() {
                     p-4 shadow-brutal-sm transition-all
                     ${isMine 
                       ? 'bg-brand-blue text-white shadow-brand-gold' 
-                      : 'bg-[var(--bg)] border-2 border-brand-blue/10 text-brand-blue shadow-brand-blue/5'}
+                      : 'bg-[var(--bg)] border-2 border-brand-blue/20 text-brand-blue-text shadow-brand-blue/5'}
                   `}>
                     <p className="font-sans text-sm leading-relaxed">{msg.text}</p>
                   </div>

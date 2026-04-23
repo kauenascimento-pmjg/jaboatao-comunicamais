@@ -21,7 +21,7 @@
 3. **Firebase Admin SDK configurado no backend:**
    - Adicione as credenciais no `backend/.env`:
      ```
-     FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@pmjg-apps-dev.iam.gserviceaccount.com
+     FIREBASE_CLIENT_EMAIL=firebase-adminsdk-xxxxx@pmjg-apps-hmol.iam.gserviceaccount.com
      FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nXXXXX...\n-----END PRIVATE KEY-----\n"
      ```
    - Obtenha em: Firebase Console → Project Settings → Service Accounts → Generate new private key

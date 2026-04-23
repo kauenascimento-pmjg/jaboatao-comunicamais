@@ -15,6 +15,7 @@ export async function seedDatabase(req: Request, res: Response): Promise<void> {
     { name: 'Suporte TI', description: 'Suporte técnico e TI da prefeitura', isOfficial: true, type: 'channel' },
     { name: 'Secretaria de Saúde', description: 'Canal da Secretaria Municipal de Saúde', isOfficial: true, type: 'channel' },
     { name: 'Secretaria de Educação', description: 'Canal da Secretaria Municipal de Educação', isOfficial: true, type: 'channel' },
+    { name: 'SEGOP', description: 'Secretaria Executiva de Governo Digital e Processos Estratégicos', isOfficial: true, type: 'channel' },
   ];
 
   try {

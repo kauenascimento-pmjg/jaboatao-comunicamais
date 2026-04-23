@@ -11,16 +11,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      setUser(user);
-      setLoading(false);
-      // Sync user profile to Firestore on every login
       if (user) {
+        setUser(user);
         await syncUserToFirestore(user).catch(console.error);
+      } else {
+        // Obter estado atual para verificar se temos um usuário AD persistido
+        const currentState = useAuthStore.getState().user;
+        const isAD = currentState && 'isAD' in currentState;
+        
+        if (!isAD) {
+          setUser(null);
+        }
       }
+      setLoading(false);
     });
 
     return () => unsubscribe();
   }, [setUser, setLoading]);
+
+  // Efeito adicional para sincronizar usuários AD quando o store mudar
+  const userAccount = useAuthStore(state => state.user);
+  
+  useEffect(() => {
+    if (userAccount && 'isAD' in userAccount) {
+      syncUserToFirestore(userAccount).catch(console.error);
+    }
+  }, [userAccount]);
 
   return <>{children}</>;
 }

@@ -1,12 +1,14 @@
 'use client';
 
 import React, { useState } from 'react';
-import { signInWithCustomToken } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
-import { Eye, EyeOff, AlertCircle, ShieldCheck } from 'lucide-react';
+import { useAuthStore, ADUser } from '@/lib/authStore';
+import { Eye, EyeOff, AlertCircle, ShieldCheck, ArrowLeft } from 'lucide-react';
 import { useTheme } from '@/components/providers/ThemeProvider';
 import { Moon, Sun } from 'lucide-react';
+import { syncUserToFirestore } from '@/lib/chatService';
 
 export default function LoginPage() {
   const [email, setEmail]       = useState('');
@@ -15,7 +17,29 @@ export default function LoginPage() {
   const [error, setError]       = useState<string | null>(null);
   const [loading, setLoading]   = useState(false);
   const { theme, toggle }       = useTheme();
+  const { setUser }             = useAuthStore();
   const router = useRouter();
+
+  /** Cria ou loga no Firebase Auth com email/senha após validação AD */
+  const signInToFirebase = async (firebaseEmail: string, firebasePassword: string, displayName: string) => {
+    try {
+      // Tentar login com credenciais existentes
+      const cred = await signInWithEmailAndPassword(auth, firebaseEmail, firebasePassword);
+      // Atualizar displayName se necessário
+      if (cred.user.displayName !== displayName) {
+        await updateProfile(cred.user, { displayName });
+      }
+      return cred;
+    } catch (err: any) {
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+        // Primeiro login — criar usuário no Firebase Auth
+        const cred = await createUserWithEmailAndPassword(auth, firebaseEmail, firebasePassword);
+        await updateProfile(cred.user, { displayName });
+        return cred;
+      }
+      throw err;
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,36 +47,58 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:4000';
-      const response = await fetch(`${backendUrl}/api/auth/ad`, {
+      // 1. Validar credenciais via AD (Backend)
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/auth/ad`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ user: email.split('@')[0], password }),
       });
 
-      const payload = (await response.json()) as { error?: string; firebaseCustomToken?: string };
-
       if (!response.ok) {
-        throw new Error(payload.error || 'Falha na autenticação via AD.');
+        if (response.status === 401 || response.status === 403) {
+          setError('Credenciais incorretas. Verifique seu usuário e senha.');
+        } else {
+          setError('Falha ao conectar com o servidor de autenticação.');
+        }
+        return;
       }
 
-      if (!payload.firebaseCustomToken) {
-        throw new Error('O servidor de autenticação não retornou um token válido.');
-      }
+      const userData = await response.json();
+      console.log('--- AD Login Success ---', userData);
+      
+      const apiUser = userData.user || {};
+      const adUsername = apiUser.username || apiUser.user || email.split('@')[0];
+      const userEmail = apiUser.email || `${adUsername}@jaboatao.pe.gov.br`;
+      const displayName = apiUser.full_name || apiUser.nome_completo || apiUser.nome || adUsername;
+      
+      // 2. Criar/logar no Firebase Auth com email/senha (ponte para Firestore rules)
+      const firebasePassword = `ad_bridge_${adUsername}_pmjg2025!`;
+      const cred = await signInToFirebase(userEmail, firebasePassword, displayName);
+      const firebaseUid = cred.user.uid;
+      console.log('Firebase Auth session created. UID:', firebaseUid);
 
-      await signInWithCustomToken(auth, payload.firebaseCustomToken);
+      // 3. Montar objeto do usuário AD usando o UID do Firebase para persistência correta
+      const adUser: ADUser = {
+        uid: firebaseUid, // MUITO IMPORTANTE: Usar o UID do Firebase para o Firestore
+        displayName,
+        email: userEmail,
+        nome_completo: displayName,
+        email_institucional: userEmail,
+        user: adUsername,
+        isAD: true,
+        department: apiUser.department || 'Geral',
+      };
+
+      // 4. Sincronizar perfil no Firestore (background)
+      syncUserToFirestore(adUser).catch(console.error);
+      
+      // 5. Salvar usuário e redirecionar
+      setUser(adUser);
       router.push('/dashboard');
-    } catch (err: unknown) {
-      const code = (err as { code?: string; message?: string })?.code ?? '';
-      const message = (err as { message?: string })?.message;
-
-      if (['auth/invalid-custom-token', 'auth/custom-token-mismatch'].includes(code)) {
-        setError('Token de autenticação inválido. Verifique a configuração do backend.');
-      } else if (message) {
-        setError(message);
-      } else {
-        setError('Erro de conexão. Tente novamente mais tarde.');
-      }
+      
+    } catch (err) {
+      console.error('Erro no login:', err);
+      setError('Erro ao autenticar. Verifique sua conexão.');
     } finally {
       setLoading(false);
     }
@@ -70,6 +116,15 @@ export default function LoginPage() {
         className="fixed top-8 right-8 p-3 bg-[var(--surface)] border-2 border-brand-blue text-brand-blue shadow-brutal-sm shadow-brand-blue hover:shadow-none transition-all"
       >
         {theme === 'dark' ? <Sun size={20} /> : <Moon size={20} />}
+      </button>
+      
+      {/* Back to Home Button */}
+      <button
+        onClick={() => router.push('/')}
+        className="fixed top-8 left-8 p-3 bg-[var(--surface)] border-2 border-brand-blue text-brand-blue shadow-brutal-sm shadow-brand-green hover:shadow-none transition-all flex items-center gap-2 font-display font-bold text-[10px] uppercase tracking-widest"
+      >
+        <ArrowLeft size={16} />
+        Voltar à Home
       </button>
 
       <div className="w-full max-w-md animate-fade-up">
@@ -97,15 +152,15 @@ export default function LoginPage() {
           <form onSubmit={handleLogin} className="space-y-6">
             <div className="space-y-2">
               <label className="block font-display font-bold text-xs uppercase tracking-widest text-brand-blue-text/60">
-                E-mail Institucional
+                Usuário / E-mail Institucional
               </label>
               <input
-                type="email"
+                type="text"
                 required
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 className="w-full bg-[var(--bg)] border-2 border-brand-blue/20 p-4 font-sans text-sm focus:border-brand-blue outline-none transition-all placeholder:opacity-30"
-                placeholder="exemplo@jaboatao.pe.gov.br"
+                placeholder="usuário ou e-mail"
               />
             </div>
 
