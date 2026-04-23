@@ -1,5 +1,6 @@
-import { db } from './firebase';
+import { db, storage } from './firebase';
 import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot, StorageError } from 'firebase/storage';
 import { User } from 'firebase/auth';
 import { ADUser } from './authStore';
 
@@ -12,6 +13,9 @@ export type Message = {
   senderId: string;
   channelId?: string;
   dmId?: string;
+  fileUrl?: string;
+  fileType?: string;
+  fileName?: string;
   createdAt: { toDate: () => Date } | null;
 };
 
@@ -28,9 +32,58 @@ export type UserProfile = {
   displayName: string;
   department?: string;
   role?: string;
+  photoURL?: string;
+  adUsername?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 };
+
+// ─── STORAGE ──────────────────────────────────────────────────────────────────
+
+/** Faz upload de um arquivo para o Firebase Storage com monitoramento */
+export async function uploadFile(file: File, folder: string = 'chat_files'): Promise<{ url: string; type: string; name: string }> {
+  return new Promise((resolve, reject) => {
+    try {
+      const timestamp = Date.now();
+      const storageRef = ref(storage, `${folder}/${timestamp}_${file.name}`);
+      const uploadTask = uploadBytesResumable(storageRef, file);
+
+      // Timeout de 120 segundos (mais paciente para o primeiro upload)
+      const timeout = setTimeout(() => {
+        uploadTask.cancel();
+        console.error('❌ Upload cancelado por timeout de 120s.');
+        reject(new Error('Tempo limite excedido. Verifique se o Storage está ativo e se suas regras permitem gravação.'));
+      }, 120000);
+
+      uploadTask.on('state_changed', 
+        (snapshot: UploadTaskSnapshot) => {
+          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+          console.log(`📤 Progresso: ${progress.toFixed(2)}%`);
+        }, 
+        (error: StorageError) => {
+          clearTimeout(timeout);
+          console.error('❌ Erro na tarefa de upload:', error.code, error.message);
+          if (error.code === 'storage/unauthorized') {
+            console.error('MOTIVO: Permissão negada. Verifique as Rules do Storage.');
+          }
+          reject(error);
+        }, 
+        async () => {
+          clearTimeout(timeout);
+          const url = await getDownloadURL(uploadTask.snapshot.ref);
+          resolve({
+            url,
+            type: file.type,
+            name: file.name
+          });
+        }
+      );
+    } catch (error) {
+      console.error('Error in uploadFile initialization:', error);
+      reject(error);
+    }
+  });
+}
 
 // ─── USER PROFILE ─────────────────────────────────────────────────────────────
 
@@ -38,14 +91,12 @@ export type UserProfile = {
 export async function syncUserToFirestore(user: User | ADUser): Promise<void> {
   try {
     const isAD = 'isAD' in user;
-    const uid = user.uid; // Já deve vir como Firebase UID do handleLogin
+    const uid = user.uid; // Firebase UID
     const email = user.email || '';
     const displayName = user.displayName || '';
     const adUsername = isAD ? (user as ADUser).user : (email.split('@')[0]);
 
     if (!uid) return;
-
-    console.log('--- Syncing User to Firestore ---', { uid, adUsername, displayName });
 
     const ref = doc(db, 'users', uid);
     await setDoc(ref, {
@@ -58,7 +109,6 @@ export async function syncUserToFirestore(user: User | ADUser): Promise<void> {
       updatedAt: serverTimestamp(),
     }, { merge: true });
     
-    console.log('User synced to Firestore:', uid);
   } catch (error) {
     console.error('Error in syncUserToFirestore:', error);
   }
@@ -92,16 +142,14 @@ const DEFAULT_CHANNELS = [
 export async function seedDefaultChannels(): Promise<void> {
   try {
     const snapshot = await getDocs(collection(db, 'channels'));
-    if (snapshot.size > 0) return; // Já existem canais
+    if (snapshot.size > 0) return;
 
-    console.log('[Seed] Creating default channels...');
     for (const channel of DEFAULT_CHANNELS) {
       await addDoc(collection(db, 'channels'), {
         ...channel,
         createdAt: serverTimestamp(),
       });
     }
-    console.log(`[Seed] ${DEFAULT_CHANNELS.length} channels created.`);
   } catch (error) {
     console.error('[Seed] Error creating default channels:', error);
   }
@@ -132,24 +180,33 @@ export function subscribeToMessages(channelId: string, callback: (messages: Mess
   });
 }
 
-export async function sendMessage(channelId: string, text: string, senderName: string, senderId: string) {
+export async function sendMessage(
+  channelId: string, 
+  text: string, 
+  senderName: string, 
+  senderId: string,
+  fileData?: { url: string; type: string; name: string }
+) {
   await addDoc(collection(db, `channels/${channelId}/messages`), {
     text,
     senderName,
     senderId,
     channelId,
+    ...(fileData && {
+      fileUrl: fileData.url,
+      fileType: fileData.type,
+      fileName: fileData.name
+    }),
     createdAt: serverTimestamp(),
   });
 }
 
 // ─── DIRECT MESSAGES ──────────────────────────────────────────────────────────
 
-/** DM ID = ID menor + ID maior, alfabeticamente — garante unicidade */
 export function getDmId(uid1: string, uid2: string): string {
   return [uid1, uid2].sort().join('_');
 }
 
-/** Cria ou busca a sala de DM entre dois usuários */
 export async function getOrCreateDm(uid1: string, uid2: string): Promise<string> {
   const dmId = getDmId(uid1, uid2);
   const dmRef = doc(db, 'direct_messages', dmId);
@@ -161,7 +218,6 @@ export async function getOrCreateDm(uid1: string, uid2: string): Promise<string>
       createdAt: serverTimestamp(),
     });
   }
-
   return dmId;
 }
 
@@ -177,12 +233,23 @@ export function subscribeToDmMessages(dmId: string, callback: (messages: Message
   });
 }
 
-export async function sendDmMessage(dmId: string, text: string, senderName: string, senderId: string) {
+export async function sendDmMessage(
+  dmId: string, 
+  text: string, 
+  senderName: string, 
+  senderId: string,
+  fileData?: { url: string; type: string; name: string }
+) {
   await addDoc(collection(db, `direct_messages/${dmId}/messages`), {
     text,
     senderName,
     senderId,
     dmId,
+    ...(fileData && {
+      fileUrl: fileData.url,
+      fileType: fileData.type,
+      fileName: fileData.name
+    }),
     createdAt: serverTimestamp(),
   });
 }

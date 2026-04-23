@@ -3,17 +3,19 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Send, Hash, MessageCircle, Users, Search, 
-  X, ChevronRight, Menu, Sun, Moon, LogOut 
+  X, ChevronRight, Menu, Sun, Moon, LogOut,
+  Paperclip, Image as ImageIcon, Film, FileText, Smile 
 } from 'lucide-react';
 import { useAuthStore } from '@/lib/authStore';
 import { useTheme } from '@/components/providers/ThemeProvider';
 import { auth } from '@/lib/firebase';
 import { signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
+// Chat Dashboard functionality for Communica+ Jaboatão
 import {
   getChannels, subscribeToMessages, sendMessage,
   getAllUsers, getOrCreateDm, subscribeToDmMessages, sendDmMessage,
-  seedDefaultChannels,
+  seedDefaultChannels, uploadFile,
   Channel, Message, UserProfile,
 } from '@/lib/chatService';
 
@@ -32,22 +34,22 @@ export default function ChatDashboard() {
   const [sidePanel, setSidePanel] = useState<'channels' | 'directory'>('channels');
   const [searchQuery, setSearchQuery] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load channels and users
   useEffect(() => {
     const loadData = async () => {
-      // Seed default channels if Firestore is empty (first time)
       await seedDefaultChannels();
-      
       const data = await getChannels();
       setChannels(data);
       if (data.length > 0 && !activeView) {
         setActiveView({ type: 'channel', id: data[0].id, name: data[0].name });
       }
-      
       const usersList = await getAllUsers();
       setUsers(usersList);
     };
@@ -84,6 +86,35 @@ export default function ChatDashboard() {
     inputRef.current?.focus();
   }, [user]);
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !activeView || !user) return;
+
+    try {
+      setIsUploading(true);
+      const fileData = await uploadFile(file);
+      const senderName = user.displayName || 'Servidor';
+      
+      if (activeView.type === 'channel') {
+        await sendMessage(activeView.id, `📎 Enviou um arquivo: ${file.name}`, senderName, user.uid, fileData);
+      } else {
+        await sendDmMessage(activeView.id, `📎 Enviou um arquivo: ${file.name}`, senderName, user.uid, fileData);
+      }
+    } catch (err: any) {
+      console.error('Upload error:', err);
+      alert(`Falha ao enviar arquivo: ${err.message}`);
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const addEmoji = (emoji: string) => {
+    setNewMessage(prev => prev + emoji);
+    setShowEmojiPicker(false);
+    inputRef.current?.focus();
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMessage.trim() || !activeView || !user) return;
@@ -104,7 +135,7 @@ export default function ChatDashboard() {
 
   const logout = async () => {
     await signOut(auth);
-    setUser(null); // Limpa o estado persistente do Zustand
+    setUser(null);
     router.push('/');
   };
 
@@ -118,7 +149,6 @@ export default function ChatDashboard() {
   return (
     <div className="flex-1 h-full flex flex-col bg-[var(--bg)] overflow-hidden relative">
       
-      {/* Header Topo Jaboatão (Responsive) */}
       <header className="h-16 border-b-2 border-brand-blue/10 bg-[var(--surface)] flex items-center justify-between px-4 lg:px-6 shrink-0 z-40">
         <div className="flex items-center gap-3">
           <button 
@@ -166,14 +196,12 @@ export default function ChatDashboard() {
 
       <div className="flex-1 flex overflow-hidden">
         
-        {/* Sidebar (Mobile Overlay + Desktop Static) */}
         <aside className={`
           fixed inset-0 lg:relative lg:inset-auto z-50 lg:z-0
           lg:flex flex-col w-72 h-full bg-[var(--surface)] border-r-2 border-brand-blue/10
           transition-transform duration-300 transform
           ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
         `}>
-          {/* Mobile Overlay Header */}
           <div className="lg:hidden flex items-center justify-between p-4 border-b-2 border-brand-blue/5">
             <span className="font-display font-extrabold text-brand-blue-text uppercase text-xs">Menu de Navegação</span>
             <button onClick={() => setIsMobileMenuOpen(false)} className="p-2 text-brand-blue-text/40">
@@ -181,7 +209,6 @@ export default function ChatDashboard() {
             </button>
           </div>
 
-          {/* Toggle Tab */}
           <div className="grid grid-cols-2 border-b-2 border-brand-blue/10">
             <button
               onClick={() => setSidePanel('channels')}
@@ -201,7 +228,6 @@ export default function ChatDashboard() {
             </button>
           </div>
 
-          {/* Buscador */}
           <div className="p-4 bg-[var(--bg)]/50">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-blue/30" size={14} />
@@ -215,7 +241,6 @@ export default function ChatDashboard() {
             </div>
           </div>
 
-          {/* Lista Rolável */}
           <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scroll">
             {sidePanel === 'channels' ? (
               channels.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase())).map(channel => (
@@ -257,18 +282,12 @@ export default function ChatDashboard() {
           </div>
         </aside>
 
-        {/* Backdrop for Mobile */}
         {isMobileMenuOpen && (
-           <div 
-             onClick={() => setIsMobileMenuOpen(false)}
-             className="lg:hidden fixed inset-0 bg-brand-blue/40 backdrop-blur-sm z-40" 
-           />
+           <div onClick={() => setIsMobileMenuOpen(false)} className="lg:hidden fixed inset-0 bg-brand-blue/40 backdrop-blur-sm z-40" />
         )}
 
-        {/* Chat Area */}
         <div className="flex-1 flex flex-col min-w-0 bg-[var(--surface)] z-0">
           
-          {/* Título do Chat (Mobile Friendly) */}
           <div className="h-14 border-b border-brand-blue/5 flex items-center gap-3 px-6 shrink-0 bg-[var(--surface)]">
             <div className={`p-1.5 ${activeView?.type === 'channel' ? 'bg-brand-blue' : 'bg-brand-gold'}`}>
               {activeView?.type === 'channel' ? <Hash size={14} className="text-white" /> : <MessageCircle size={14} className="text-brand-blue" />}
@@ -278,7 +297,6 @@ export default function ChatDashboard() {
             </h3>
           </div>
 
-          {/* Mensagens */}
           <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6 custom-scroll">
             {messages.length === 0 && activeView && (
               <div className="h-full flex flex-col items-center justify-center text-center p-10 opacity-20">
@@ -302,7 +320,25 @@ export default function ChatDashboard() {
                       ? 'bg-brand-blue text-white shadow-brand-gold' 
                       : 'bg-[var(--bg)] border-2 border-brand-blue/20 text-brand-blue-text shadow-brand-blue/5'}
                   `}>
-                    <p className="font-sans text-sm leading-relaxed">{msg.text}</p>
+                    {/* Renderização de Media */}
+                    {msg.fileUrl && (
+                      <div className="mb-3 rounded overflow-hidden bg-black/5 dark:bg-white/5 p-1 max-w-sm">
+                        {msg.fileType?.startsWith('image/') ? (
+                          <img src={msg.fileUrl} alt={msg.fileName} className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90" onClick={() => window.open(msg.fileUrl, '_blank')} />
+                        ) : msg.fileType?.startsWith('video/') ? (
+                          <video src={msg.fileUrl} controls className="max-w-full rounded" />
+                        ) : (
+                          <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-brand-blue/5 hover:bg-brand-blue/10 transition-colors rounded">
+                            <FileText size={24} className="text-brand-blue" />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-bold truncate">{msg.fileName}</p>
+                              <p className="text-[9px] uppercase tracking-tighter opacity-60 italic text-brand-blue">Baixar anexo</p>
+                            </div>
+                          </a>
+                        )}
+                      </div>
+                    )}
+                    <p className="font-sans text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
                   </div>
                   <span className="text-[8px] font-bold text-brand-blue/30 uppercase mt-1.5 px-1">{time}</span>
                 </div>
@@ -311,21 +347,51 @@ export default function ChatDashboard() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Campo de Entrada */}
-          <div className="p-4 border-t-2 border-brand-blue/10 bg-[var(--surface)]">
-            <form onSubmit={handleSend} className="flex gap-2 max-w-5xl mx-auto">
-              <input
-                ref={inputRef}
-                type="text"
-                value={newMessage}
-                onChange={e => setNewMessage(e.target.value)}
-                placeholder="Escreva sua mensagem oficial..."
-                className="flex-1 bg-[var(--bg)] border-2 border-brand-blue/10 p-4 font-sans text-sm focus:border-brand-blue outline-none transition-all shadow-inner"
-              />
+          <div className="p-4 border-t-2 border-brand-blue/10 bg-[var(--surface)] relative">
+            
+            {showEmojiPicker && (
+              <div className="absolute bottom-full left-4 mb-2 bg-[var(--surface)] border-2 border-brand-blue p-2 shadow-brutal-md shadow-brand-gold grid grid-cols-8 gap-1 z-50">
+                {['😊','😂','❤️','👍','🙌','🔥','👏','🚀','✨','🎉','📢','✅','⚠️','🤝','💼','📅'].map(emoji => (
+                  <button key={emoji} onClick={() => addEmoji(emoji)} className="p-2 hover:bg-brand-blue/5 text-xl transition-transform hover:scale-125">
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <form onSubmit={handleSend} className="flex gap-2 max-w-5xl mx-auto items-end">
+              <div className="flex-1 bg-[var(--bg)] border-2 border-brand-blue/10 flex flex-col shadow-inner focus-within:border-brand-blue transition-all">
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={newMessage}
+                  onChange={e => setNewMessage(e.target.value)}
+                  placeholder={isUploading ? 'Enviando...' : 'Escreva sua mensagem...'}
+                  disabled={isUploading}
+                  className="w-full bg-transparent p-4 font-sans text-sm outline-none"
+                />
+                
+                <div className="flex items-center gap-1 px-2 pb-2 opacity-60 hover:opacity-100 transition-opacity">
+                  <button type="button" onClick={() => setShowEmojiPicker(!showEmojiPicker)} className="p-2 hover:bg-brand-blue/5 rounded text-brand-blue">
+                    <Smile size={18} />
+                  </button>
+                  <label className="p-2 hover:bg-brand-blue/5 rounded text-brand-blue cursor-pointer">
+                    <Paperclip size={18} />
+                    <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileUpload} />
+                  </label>
+                  <button type="button" className="p-2 hover:bg-brand-blue/5 rounded text-brand-blue" onClick={() => fileInputRef.current?.click()}>
+                    <ImageIcon size={18} />
+                  </button>
+                  {isUploading && (
+                    <span className="text-[9px] font-bold text-brand-gold uppercase animate-pulse ml-2">Enviando...</span>
+                  )}
+                </div>
+              </div>
+
               <button
                 type="submit"
-                disabled={!newMessage.trim()}
-                className="bg-brand-blue text-white w-14 lg:w-20 flex items-center justify-center shadow-brutal-sm shadow-brand-gold hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 disabled:opacity-30 transition-all"
+                disabled={(!newMessage.trim() && !isUploading) || isUploading}
+                className="bg-brand-blue text-white w-14 lg:w-20 h-[58px] flex items-center justify-center shadow-brutal-sm shadow-brand-gold hover:shadow-none hover:translate-x-0.5 hover:translate-y-0.5 disabled:opacity-30 transition-all flex-shrink-0"
               >
                 <Send size={18} />
               </button>
