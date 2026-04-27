@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Send, Hash, MessageCircle, Users, Search, 
   X, ChevronRight, Menu, Sun, Moon, LogOut,
-  Paperclip, Image as ImageIcon, Film, FileText, Smile 
+  Paperclip, Image as ImageIcon, Film, FileText, Smile, Trash2 
 } from 'lucide-react';
 import { useAuthStore } from '@/lib/authStore';
 import { useTheme } from '@/components/providers/ThemeProvider';
@@ -16,6 +16,7 @@ import {
   getChannels, subscribeToMessages, sendMessage,
   getAllUsers, getOrCreateDm, subscribeToDmMessages, sendDmMessage,
   seedDefaultChannels, uploadFile,
+  deleteChannelMessage, deleteDmMessage, setTypingStatus, subscribeToTypingStatus,
   Channel, Message, UserProfile,
 } from '@/lib/chatService';
 
@@ -31,6 +32,7 @@ export default function ChatDashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeView, setActiveView] = useState<ActiveView | null>(null);
   const [newMessage, setNewMessage] = useState('');
+  const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [sidePanel, setSidePanel] = useState<'channels' | 'directory'>('channels');
   const [searchQuery, setSearchQuery] = useState('');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -40,6 +42,8 @@ export default function ChatDashboard() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isTypingRef = useRef(false);
 
   // Load channels and users
   useEffect(() => {
@@ -57,11 +61,13 @@ export default function ChatDashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Subscribe to messages
+  // Subscribe to messages and typing state for DMs
   useEffect(() => {
     if (!activeView) return;
     setMessages([]);
+    setTypingUsers([]);
     let unsubscribe: () => void;
+    let unsubscribeTyping: (() => void) | undefined;
 
     if (activeView.type === 'channel') {
       unsubscribe = subscribeToMessages(activeView.id, (msgs) => {
@@ -73,10 +79,21 @@ export default function ChatDashboard() {
         setMessages(msgs);
         setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
       });
+
+      unsubscribeTyping = subscribeToTypingStatus(activeView.id, (typingIds) => {
+        setTypingUsers(typingIds.filter(id => id !== user?.uid));
+      });
     }
 
-    return () => unsubscribe?.();
-  }, [activeView]);
+    return () => {
+      unsubscribe?.();
+      unsubscribeTyping?.();
+      setTypingUsers([]);
+      if (activeView.type === 'dm' && user) {
+        setTypingStatus(activeView.id, user.uid, false).catch(() => undefined);
+      }
+    };
+  }, [activeView, user]);
 
   const openDm = useCallback(async (otherUser: UserProfile) => {
     if (!user) return;
@@ -85,6 +102,55 @@ export default function ChatDashboard() {
     setIsMobileMenuOpen(false);
     inputRef.current?.focus();
   }, [user]);
+
+  const updateTypingStatus = useCallback(async (typing: boolean) => {
+    if (!user || !activeView || activeView.type !== 'dm') return;
+    if (typing === isTypingRef.current) return;
+
+    try {
+      await setTypingStatus(activeView.id, user.uid, typing);
+      isTypingRef.current = typing;
+    } catch (err) {
+      console.error('Typing status error:', err);
+    }
+  }, [activeView, user]);
+
+  const stopTyping = useCallback(() => {
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = null;
+    }
+
+    updateTypingStatus(false);
+  }, [updateTypingStatus]);
+
+  const handleNewMessageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setNewMessage(value);
+
+    if (activeView?.type === 'dm' && user) {
+      updateTypingStatus(true);
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+      typingTimeoutRef.current = setTimeout(() => updateTypingStatus(false), 1300);
+    }
+  };
+
+  const handleDeleteMessage = async (msg: Message) => {
+    if (!activeView || !user || msg.senderId !== user.uid) return;
+
+    try {
+      if (activeView.type === 'channel') {
+        await deleteChannelMessage(activeView.id, msg.id);
+      } else {
+        await deleteDmMessage(activeView.id, msg.id);
+      }
+    } catch (err) {
+      console.error('Delete message error:', err);
+      alert('Não foi possível excluir a mensagem. Por favor, tente novamente.');
+    }
+  };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -120,6 +186,7 @@ export default function ChatDashboard() {
     if (!newMessage.trim() || !activeView || !user) return;
     const text = newMessage;
     setNewMessage('');
+    stopTyping();
     const senderName = user.displayName || user.email?.split('@')[0] || 'Servidor';
 
     try {
@@ -314,36 +381,62 @@ export default function ChatDashboard() {
                   {!isMine && (
                     <span className="text-[10px] font-bold text-brand-green uppercase tracking-widest mb-1 ml-1">{msg.senderName}</span>
                   )}
-                  <div className={`
-                    p-4 shadow-brutal-sm transition-all
-                    ${isMine 
-                      ? 'bg-brand-blue text-white shadow-brand-gold' 
-                      : 'bg-[var(--bg)] border-2 border-brand-blue/20 text-brand-blue-text shadow-brand-blue/5'}
-                  `}>
-                    {/* Renderização de Media */}
-                    {msg.fileUrl && (
-                      <div className="mb-3 rounded overflow-hidden bg-black/5 dark:bg-white/5 p-1 max-w-sm">
-                        {msg.fileType?.startsWith('image/') ? (
-                          <img src={msg.fileUrl} alt={msg.fileName} className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90" onClick={() => window.open(msg.fileUrl, '_blank')} />
-                        ) : msg.fileType?.startsWith('video/') ? (
-                          <video src={msg.fileUrl} controls className="max-w-full rounded" />
-                        ) : (
-                          <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-brand-blue/5 hover:bg-brand-blue/10 transition-colors rounded">
-                            <FileText size={24} className="text-brand-blue" />
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-bold truncate">{msg.fileName}</p>
-                              <p className="text-[9px] uppercase tracking-tighter opacity-60 italic text-brand-blue">Baixar anexo</p>
-                            </div>
-                          </a>
-                        )}
-                      </div>
+                  <div className="relative">
+                    <div className={`
+                      p-4 shadow-brutal-sm transition-all
+                      ${isMine 
+                        ? 'bg-brand-blue text-white shadow-brand-gold' 
+                        : 'bg-[var(--bg)] border-2 border-brand-blue/20 text-brand-blue-text shadow-brand-blue/5'}
+                    `}>
+                      {/* Renderização de Media */}
+                      {msg.fileUrl && (
+                        <div className="mb-3 rounded overflow-hidden bg-black/5 dark:bg-white/5 p-1 max-w-sm">
+                          {msg.fileType?.startsWith('image/') ? (
+                            <img src={msg.fileUrl} alt={msg.fileName} className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90" onClick={() => window.open(msg.fileUrl, '_blank')} />
+                          ) : msg.fileType?.startsWith('video/') ? (
+                            <video src={msg.fileUrl} controls className="max-w-full rounded" />
+                          ) : (
+                            <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-brand-blue/5 hover:bg-brand-blue/10 transition-colors rounded">
+                              <FileText size={24} className="text-brand-blue" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-bold truncate">{msg.fileName}</p>
+                                <p className="text-[9px] uppercase tracking-tighter opacity-60 italic text-brand-blue">Baixar anexo</p>
+                              </div>
+                            </a>
+                          )}
+                        </div>
+                      )}
+                      <p className="font-sans text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                    </div>
+                    {isMine && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteMessage(msg)}
+                        className="absolute top-2 right-2 p-1 rounded-full text-brand-blue-text/60 hover:text-brand-red transition-colors"
+                        aria-label="Excluir mensagem"
+                      >
+                        <Trash2 size={14} />
+                      </button>
                     )}
-                    <p className="font-sans text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
                   </div>
-                  <span className="text-[8px] font-bold text-brand-blue/30 uppercase mt-1.5 px-1">{time}</span>
+                  <span className="text-[8px] font-bold text-white/70 uppercase mt-1.5 px-1">{time}</span>
                 </div>
               );
             })}
+            {activeView?.type === 'dm' && typingUsers.length > 0 && (
+              <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-brand-blue-text/70">
+                <div className="flex items-center gap-1">
+                  {[0, 1, 2].map(dot => (
+                    <span
+                      key={dot}
+                      className="h-2 w-2 rounded-full bg-brand-blue animate-pulse"
+                      style={{ animationDelay: `${dot * 150}ms` }}
+                    />
+                  ))}
+                </div>
+                <span>digitando...</span>
+              </div>
+            )}
             <div ref={messagesEndRef} />
           </div>
 
@@ -365,7 +458,8 @@ export default function ChatDashboard() {
                   ref={inputRef}
                   type="text"
                   value={newMessage}
-                  onChange={e => setNewMessage(e.target.value)}
+                  onChange={handleNewMessageChange}
+                  onBlur={stopTyping}
                   placeholder={isUploading ? 'Enviando...' : 'Escreva sua mensagem...'}
                   disabled={isUploading}
                   className="w-full bg-transparent p-4 font-sans text-sm outline-none"

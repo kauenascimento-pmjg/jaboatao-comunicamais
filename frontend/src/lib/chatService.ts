@@ -1,5 +1,5 @@
 import { db, storage } from './firebase';
-import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs } from 'firebase/firestore';
+import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot, StorageError } from 'firebase/storage';
 import { User } from 'firebase/auth';
 import { ADUser } from './authStore';
@@ -198,6 +198,48 @@ export async function sendMessage(
       fileName: fileData.name
     }),
     createdAt: serverTimestamp(),
+  });
+}
+
+export async function deleteChannelMessage(channelId: string, messageId: string) {
+  try {
+    await deleteDoc(doc(db, 'channels', channelId, 'messages', messageId));
+  } catch (error) {
+    console.error('Error deleting channel message:', error);
+    throw error;
+  }
+}
+
+export async function deleteDmMessage(dmId: string, messageId: string) {
+  try {
+    await deleteDoc(doc(db, 'direct_messages', dmId, 'messages', messageId));
+  } catch (error) {
+    console.error('Error deleting dm message:', error);
+    throw error;
+  }
+}
+
+export async function setTypingStatus(dmId: string, userId: string, isTyping: boolean) {
+  try {
+    await setDoc(doc(db, `direct_messages/${dmId}/typing`, userId), {
+      userId,
+      isTyping,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    console.error('Error updating typing status:', error);
+  }
+}
+
+export function subscribeToTypingStatus(dmId: string, callback: (typingUserIds: string[]) => void) {
+  const typingCollection = collection(db, `direct_messages/${dmId}/typing`);
+  return onSnapshot(typingCollection, (snapshot) => {
+    const typingUsers: string[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as { userId: string; isTyping: boolean };
+      if (data?.isTyping) typingUsers.push(data.userId);
+    });
+    callback(typingUsers);
   });
 }
 
