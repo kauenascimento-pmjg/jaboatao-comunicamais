@@ -1,5 +1,5 @@
 import { db, storage } from './firebase';
-import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs, updateDoc, arrayUnion, deleteField } from 'firebase/firestore';
+import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs, updateDoc, arrayUnion, deleteField, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot, StorageError } from 'firebase/storage';
 import { User } from 'firebase/auth';
 import { ADUser } from './authStore';
@@ -11,6 +11,11 @@ export type Message = {
   text: string;
   senderName: string;
   senderId: string;
+  replyTo?: {
+    id: string;
+    text: string;
+    senderName: string;
+  };
   deliveredTo?: string[];
   readBy?: string[];
   isDeleted?: boolean;
@@ -29,6 +34,9 @@ export type Channel = {
   name: string;
   description?: string;
   type?: string;
+  createdBy?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
 };
 
 export type UserProfile = {
@@ -160,32 +168,6 @@ export async function setUserPresence(uid: string, isOnline: boolean) {
 
 // ─── CHANNELS ─────────────────────────────────────────────────────────────────
 
-const DEFAULT_CHANNELS = [
-  { name: 'Geral', description: 'Canal geral para todos os servidores', isOfficial: true, type: 'channel' },
-  { name: 'Avisos RH', description: 'Comunicados oficiais de Recursos Humanos', isOfficial: true, type: 'channel' },
-  { name: 'Suporte TI', description: 'Suporte técnico e TI da prefeitura', isOfficial: true, type: 'channel' },
-  { name: 'Secretaria de Saúde', description: 'Canal da Secretaria Municipal de Saúde', isOfficial: true, type: 'channel' },
-  { name: 'Secretaria de Educação', description: 'Canal da Secretaria Municipal de Educação', isOfficial: true, type: 'channel' },
-  { name: 'SEGOP', description: 'Secretaria Executiva de Governo Digital e Processos Estratégicos', isOfficial: true, type: 'channel' },
-];
-
-/** Cria canais padrão no Firestore se não existirem */
-export async function seedDefaultChannels(): Promise<void> {
-  try {
-    const snapshot = await getDocs(collection(db, 'channels'));
-    if (snapshot.size > 0) return;
-
-    for (const channel of DEFAULT_CHANNELS) {
-      await addDoc(collection(db, 'channels'), {
-        ...channel,
-        createdAt: serverTimestamp(),
-      });
-    }
-  } catch (error) {
-    console.error('[Seed] Error creating default channels:', error);
-  }
-}
-
 /** Busca todos os canais diretamente do Firestore */
 export async function getChannels(): Promise<Channel[]> {
   try {
@@ -197,6 +179,36 @@ export async function getChannels(): Promise<Channel[]> {
     console.error('Error in getChannels:', error);
     return [];
   }
+}
+
+export async function createChannel(name: string, createdBy: string, description?: string): Promise<string> {
+  const channelRef = await addDoc(collection(db, 'channels'), {
+    name: name.trim(),
+    description: description?.trim() || '',
+    type: 'channel',
+    createdBy,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  return channelRef.id;
+}
+
+export async function updateChannel(channelId: string, name: string, description?: string) {
+  await updateDoc(doc(db, 'channels', channelId), {
+    name: name.trim(),
+    description: description?.trim() || '',
+    updatedAt: serverTimestamp(),
+  });
+}
+
+export async function deleteChannel(channelId: string) {
+  await deleteDoc(doc(db, 'channels', channelId));
+}
+
+export async function clearAllChannels() {
+  const snapshot = await getDocs(collection(db, 'channels'));
+  await Promise.all(snapshot.docs.map((channelDoc) => deleteDoc(channelDoc.ref)));
 }
 
 export function subscribeToMessages(channelId: string, callback: (messages: Message[]) => void) {
@@ -216,13 +228,15 @@ export async function sendMessage(
   text: string, 
   senderName: string, 
   senderId: string,
-  fileData?: { url: string; type: string; name: string }
+  fileData?: { url: string; type: string; name: string },
+  replyTo?: { id: string; text: string; senderName: string }
 ) {
   await addDoc(collection(db, `channels/${channelId}/messages`), {
     text,
     senderName,
     senderId,
     channelId,
+    ...(replyTo && { replyTo }),
     ...(fileData && {
       fileUrl: fileData.url,
       fileType: fileData.type,
@@ -300,8 +314,32 @@ export async function setTypingStatus(dmId: string, userId: string, isTyping: bo
   }
 }
 
+export async function setChannelTypingStatus(channelId: string, userId: string, isTyping: boolean) {
+  try {
+    await setDoc(doc(db, `channels/${channelId}/typing`, userId), {
+      userId,
+      isTyping,
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    console.error('Error updating channel typing status:', error);
+  }
+}
+
 export function subscribeToTypingStatus(dmId: string, callback: (typingUserIds: string[]) => void) {
   const typingCollection = collection(db, `direct_messages/${dmId}/typing`);
+  return onSnapshot(typingCollection, (snapshot) => {
+    const typingUsers: string[] = [];
+    snapshot.forEach((docSnap) => {
+      const data = docSnap.data() as { userId: string; isTyping: boolean };
+      if (data?.isTyping) typingUsers.push(data.userId);
+    });
+    callback(typingUsers);
+  });
+}
+
+export function subscribeToChannelTypingStatus(channelId: string, callback: (typingUserIds: string[]) => void) {
+  const typingCollection = collection(db, `channels/${channelId}/typing`);
   return onSnapshot(typingCollection, (snapshot) => {
     const typingUsers: string[] = [];
     snapshot.forEach((docSnap) => {
@@ -349,13 +387,15 @@ export async function sendDmMessage(
   text: string, 
   senderName: string, 
   senderId: string,
-  fileData?: { url: string; type: string; name: string }
+  fileData?: { url: string; type: string; name: string },
+  replyTo?: { id: string; text: string; senderName: string }
 ) {
   await addDoc(collection(db, `direct_messages/${dmId}/messages`), {
     text,
     senderName,
     senderId,
     dmId,
+    ...(replyTo && { replyTo }),
     deliveredTo: [senderId],
     readBy: [senderId],
     ...(fileData && {

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Send, Hash, MessageCircle, Users, Search, 
   X, ChevronRight, Menu, Sun, Moon, LogOut,
-  Paperclip, Image as ImageIcon, Film, FileText, Smile, Trash2, Check, CheckCheck, MoreVertical, Pencil
+  Paperclip, Image as ImageIcon, Film, FileText, Smile, Trash2, Check, CheckCheck, MoreVertical, Pencil, Plus
 } from 'lucide-react';
 import { useAuthStore } from '@/lib/authStore';
 import { useTheme } from '@/components/providers/ThemeProvider';
@@ -15,8 +15,9 @@ import { useRouter } from 'next/navigation';
 import {
   getChannels, subscribeToMessages, sendMessage,
   getOrCreateDm, subscribeToDmMessages, sendDmMessage,
-  seedDefaultChannels, uploadFile,
-  deleteChannelMessage, deleteDmMessage, updateChannelMessage, updateDmMessage, setTypingStatus, subscribeToTypingStatus, updateDmMessagesStatus, subscribeToUsers, setUserPresence,
+  uploadFile,
+  deleteChannelMessage, deleteDmMessage, updateChannelMessage, updateDmMessage, setTypingStatus, setChannelTypingStatus, subscribeToTypingStatus, subscribeToChannelTypingStatus, updateDmMessagesStatus, subscribeToUsers, setUserPresence,
+  createChannel, updateChannel, deleteChannel, clearAllChannels,
   Channel, Message, UserProfile,
 } from '@/lib/chatService';
 
@@ -32,6 +33,14 @@ export default function ChatDashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeView, setActiveView] = useState<ActiveView | null>(null);
   const [newMessage, setNewMessage] = useState('');
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
+  const [isChannelModalOpen, setIsChannelModalOpen] = useState(false);
+  const [editingChannel, setEditingChannel] = useState<Channel | null>(null);
+  const [channelNameInput, setChannelNameInput] = useState('');
+  const [channelDescriptionInput, setChannelDescriptionInput] = useState('');
+  const [openChannelMenuId, setOpenChannelMenuId] = useState<string | null>(null);
+  const [pendingDeleteChannel, setPendingDeleteChannel] = useState<Channel | null>(null);
+  const [isClearChannelsConfirmOpen, setIsClearChannelsConfirmOpen] = useState(false);
   const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
   const [pendingDeleteMessage, setPendingDeleteMessage] = useState<Message | null>(null);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
@@ -51,20 +60,38 @@ export default function ChatDashboard() {
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
   const PRESENCE_STALE_MS = 45000;
+  const MESSAGE_EDIT_DELETE_WINDOW_MS = 10 * 60 * 1000;
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+  const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 
   // Load channels and users
   useEffect(() => {
     const loadData = async () => {
-      await seedDefaultChannels();
       const data = await getChannels();
       setChannels(data);
-      if (data.length > 0 && !activeView) {
-        setActiveView({ type: 'channel', id: data[0].id, name: data[0].name });
-      }
     };
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (channels.length === 0) {
+      if (activeView?.type === 'channel') setActiveView(null);
+      return;
+    }
+
+    if (!activeView) {
+      setActiveView({ type: 'channel', id: channels[0].id, name: channels[0].name });
+      return;
+    }
+
+    if (activeView.type === 'channel') {
+      const stillExists = channels.some((channel) => channel.id === activeView.id);
+      if (!stillExists) {
+        setActiveView({ type: 'channel', id: channels[0].id, name: channels[0].name });
+      }
+    }
+  }, [channels, activeView]);
 
   useEffect(() => {
     const unsubscribe = subscribeToUsers((usersList) => {
@@ -115,6 +142,10 @@ export default function ChatDashboard() {
         setMessages(msgs);
         setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
       });
+
+      unsubscribeTyping = subscribeToChannelTypingStatus(activeView.id, (typingIds) => {
+        setTypingUsers(typingIds.filter(id => id !== user?.uid));
+      });
     } else {
       unsubscribe = subscribeToDmMessages(activeView.id, (msgs) => {
         setMessages(msgs);
@@ -130,8 +161,12 @@ export default function ChatDashboard() {
       unsubscribe?.();
       unsubscribeTyping?.();
       setTypingUsers([]);
-      if (activeView.type === 'dm' && user) {
-        setTypingStatus(activeView.id, user.uid, false).catch(() => undefined);
+      if (user) {
+        if (activeView.type === 'dm') {
+          setTypingStatus(activeView.id, user.uid, false).catch(() => undefined);
+        } else {
+          setChannelTypingStatus(activeView.id, user.uid, false).catch(() => undefined);
+        }
       }
     };
   }, [activeView, user]);
@@ -173,11 +208,15 @@ export default function ChatDashboard() {
   }, [user]);
 
   const updateTypingStatus = useCallback(async (typing: boolean) => {
-    if (!user || !activeView || activeView.type !== 'dm') return;
+    if (!user || !activeView) return;
     if (typing === isTypingRef.current) return;
 
     try {
-      await setTypingStatus(activeView.id, user.uid, typing);
+      if (activeView.type === 'dm') {
+        await setTypingStatus(activeView.id, user.uid, typing);
+      } else {
+        await setChannelTypingStatus(activeView.id, user.uid, typing);
+      }
       isTypingRef.current = typing;
     } catch (err) {
       console.error('Typing status error:', err);
@@ -197,7 +236,7 @@ export default function ChatDashboard() {
     const value = e.target.value;
     setNewMessage(value);
 
-    if (activeView?.type === 'dm' && user) {
+    if (activeView && user) {
       updateTypingStatus(true);
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
@@ -206,8 +245,98 @@ export default function ChatDashboard() {
     }
   };
 
+  const handleReplyMessage = (msg: Message) => {
+    setReplyingTo(msg);
+    setOpenMessageMenuId(null);
+    inputRef.current?.focus();
+  };
+
+  const openCreateChannelModal = () => {
+    setEditingChannel(null);
+    setChannelNameInput('');
+    setChannelDescriptionInput('');
+    setIsChannelModalOpen(true);
+  };
+
+  const openEditChannelModal = (channel: Channel) => {
+    setEditingChannel(channel);
+    setChannelNameInput(channel.name || '');
+    setChannelDescriptionInput(channel.description || '');
+    setOpenChannelMenuId(null);
+    setIsChannelModalOpen(true);
+  };
+
+  const closeChannelModal = () => {
+    setIsChannelModalOpen(false);
+    setEditingChannel(null);
+    setChannelNameInput('');
+    setChannelDescriptionInput('');
+  };
+
+  const saveChannel = async () => {
+    if (!user?.uid) return;
+
+    const normalizedName = channelNameInput.trim();
+    if (!normalizedName) {
+      setChatNotice('Informe o nome do canal.');
+      return;
+    }
+
+    try {
+      if (editingChannel) {
+        await updateChannel(editingChannel.id, normalizedName, channelDescriptionInput);
+      } else {
+        const channelId = await createChannel(normalizedName, user.uid, channelDescriptionInput);
+        setActiveView({ type: 'channel', id: channelId, name: normalizedName });
+      }
+
+      const refreshedChannels = await getChannels();
+      setChannels(refreshedChannels);
+      closeChannelModal();
+    } catch (err) {
+      console.error('Channel save error:', err);
+      setChatNotice('Não foi possível salvar o canal.');
+    }
+  };
+
+  const askDeleteChannel = (channel: Channel) => {
+    setPendingDeleteChannel(channel);
+    setOpenChannelMenuId(null);
+  };
+
+  const confirmDeleteChannel = async () => {
+    if (!pendingDeleteChannel) return;
+
+    try {
+      await deleteChannel(pendingDeleteChannel.id);
+      setPendingDeleteChannel(null);
+      const refreshedChannels = await getChannels();
+      setChannels(refreshedChannels);
+    } catch (err) {
+      console.error('Delete channel error:', err);
+      setChatNotice('Não foi possível excluir o canal.');
+    }
+  };
+
+  const confirmClearChannels = async () => {
+    try {
+      await clearAllChannels();
+      setChannels([]);
+      setActiveView(null);
+      setIsClearChannelsConfirmOpen(false);
+      setChatNotice('Todos os canais foram removidos.');
+    } catch (err) {
+      console.error('Clear channels error:', err);
+      setChatNotice('Não foi possível limpar os canais.');
+    }
+  };
+
   const handleDeleteMessage = async (msg: Message) => {
     if (!activeView || !user || msg.senderId !== user.uid) return;
+    if (!canManageMessage(msg)) {
+      setChatNotice('Você só pode editar/excluir mensagens enviadas há até 10 minutos.');
+      return;
+    }
     setPendingDeleteMessage(msg);
     setOpenMessageMenuId(null);
   };
@@ -230,9 +359,25 @@ export default function ChatDashboard() {
 
   const handleEditMessage = (msg: Message) => {
     if (!activeView || !user || msg.senderId !== user.uid) return;
+    if (!canManageMessage(msg)) {
+      setChatNotice('Você só pode editar/excluir mensagens enviadas há até 10 minutos.');
+      return;
+    }
     setEditingMessage(msg);
     setEditingText(msg.text);
     setOpenMessageMenuId(null);
+  };
+
+  const validateFileSize = (file: File) => {
+    if (file.type.startsWith('image/') && file.size > MAX_IMAGE_BYTES) {
+      return 'Imagem excede o limite de 5MB.';
+    }
+
+    if (file.type.startsWith('video/') && file.size > MAX_VIDEO_BYTES) {
+      return 'Vídeo excede o limite de 50MB.';
+    }
+
+    return null;
   };
 
   const confirmEditMessage = async () => {
@@ -267,10 +412,19 @@ export default function ChatDashboard() {
       const senderName = user.displayName || 'Servidor';
 
       if (activeView.type === 'channel') {
-        await sendMessage(activeView.id, `📎 Enviou um arquivo: ${file.name}`, senderName, user.uid, fileData);
+        await sendMessage(activeView.id, `📎 Enviou um arquivo: ${file.name}`, senderName, user.uid, fileData, replyingTo ? {
+          id: replyingTo.id,
+          text: replyingTo.text,
+          senderName: replyingTo.senderName,
+        } : undefined);
       } else {
-        await sendDmMessage(activeView.id, `📎 Enviou um arquivo: ${file.name}`, senderName, user.uid, fileData);
+        await sendDmMessage(activeView.id, `📎 Enviou um arquivo: ${file.name}`, senderName, user.uid, fileData, replyingTo ? {
+          id: replyingTo.id,
+          text: replyingTo.text,
+          senderName: replyingTo.senderName,
+        } : undefined);
       }
+      setReplyingTo(null);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'erro desconhecido';
       console.error('Upload error:', err);
@@ -279,11 +433,19 @@ export default function ChatDashboard() {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
-  }, [activeView, user]);
+  }, [activeView, user, replyingTo]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    const sizeError = validateFileSize(file);
+    if (sizeError) {
+      setChatNotice(sizeError);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     setPendingFileToSend(file);
   };
 
@@ -302,6 +464,13 @@ export default function ChatDashboard() {
     const ext = imageFile.type.split('/')[1] || 'png';
     const fileName = `print_${Date.now()}.${ext}`;
     const fileToUpload = new File([imageFile], fileName, { type: imageFile.type });
+
+    const sizeError = validateFileSize(fileToUpload);
+    if (sizeError) {
+      setChatNotice(sizeError);
+      return;
+    }
+
     setPendingFileToSend(fileToUpload);
   };
 
@@ -328,10 +497,19 @@ export default function ChatDashboard() {
 
     try {
       if (activeView.type === 'channel') {
-        await sendMessage(activeView.id, text, senderName, user.uid);
+        await sendMessage(activeView.id, text, senderName, user.uid, undefined, replyingTo ? {
+          id: replyingTo.id,
+          text: replyingTo.text,
+          senderName: replyingTo.senderName,
+        } : undefined);
       } else {
-        await sendDmMessage(activeView.id, text, senderName, user.uid);
+        await sendDmMessage(activeView.id, text, senderName, user.uid, undefined, replyingTo ? {
+          id: replyingTo.id,
+          text: replyingTo.text,
+          senderName: replyingTo.senderName,
+        } : undefined);
       }
+      setReplyingTo(null);
     } catch (err) {
       console.error('Send error:', err);
     }
@@ -374,6 +552,12 @@ export default function ChatDashboard() {
   const checkDefaultClass = theme === 'dark' ? 'text-white/70' : 'text-brand-blue-text/60';
   const menuButtonClass = theme === 'dark' ? 'text-white/75 hover:text-white' : 'text-brand-blue hover:text-brand-blue-text';
 
+  const canManageMessage = (msg: Message) => {
+    if (!msg.createdAt?.toDate) return false;
+    const createdAt = msg.createdAt.toDate().getTime();
+    return Date.now() - createdAt <= MESSAGE_EDIT_DELETE_WINDOW_MS;
+  };
+
   const renderMessageStatus = (msg: Message, isMine: boolean) => {
     const time = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
 
@@ -401,7 +585,12 @@ export default function ChatDashboard() {
 
   useEffect(() => {
     setOpenMessageMenuId(null);
+    setReplyingTo(null);
   }, [activeView]);
+
+  useEffect(() => {
+    setOpenChannelMenuId(null);
+  }, [sidePanel]);
 
   useEffect(() => {
     if (!chatNotice) return;
@@ -492,6 +681,24 @@ export default function ChatDashboard() {
           </div>
 
           <div className="p-4 bg-[var(--bg)]/50">
+            {sidePanel === 'channels' && (
+              <div className="mb-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={openCreateChannelModal}
+                  className="flex-1 flex items-center justify-center gap-2 px-3 py-2 text-[10px] font-bold uppercase tracking-widest bg-brand-blue text-white hover:opacity-90"
+                >
+                  <Plus size={13} /> Novo canal
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsClearChannelsConfirmOpen(true)}
+                  className="px-3 py-2 text-[10px] font-bold uppercase tracking-widest border border-brand-red/30 text-brand-red hover:bg-brand-red/5"
+                >
+                  Limpar
+                </button>
+              </div>
+            )}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-blue/30" size={14} />
               <input
@@ -507,18 +714,52 @@ export default function ChatDashboard() {
           <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scroll">
             {sidePanel === 'channels' ? (
               channels.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase())).map(channel => (
-                <button
+                <div
                   key={channel.id}
-                  onClick={() => { setActiveView({ type: 'channel', id: channel.id, name: channel.name }); setIsMobileMenuOpen(false); }}
-                  className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-all border-l-4 ${
+                  className={`w-full flex items-center gap-2 px-2 py-2 transition-all border-l-4 ${
                     activeView?.type === 'channel' && activeView.id === channel.id
                       ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
                       : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
                   }`}
                 >
-                  <Hash size={14} className="opacity-60" />
-                  <span className="text-xs font-bold uppercase tracking-wider truncate">{channel.name}</span>
-                </button>
+                  <button
+                    onClick={() => { setActiveView({ type: 'channel', id: channel.id, name: channel.name }); setIsMobileMenuOpen(false); }}
+                    className="flex-1 min-w-0 flex items-center gap-3 px-2 py-1 text-left"
+                  >
+                    <Hash size={14} className="opacity-60 shrink-0" />
+                    <span className="text-xs font-bold uppercase tracking-wider truncate">{channel.name}</span>
+                  </button>
+
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setOpenChannelMenuId((prev) => (prev === channel.id ? null : channel.id))}
+                      className="p-1 rounded-full hover:bg-brand-blue/10"
+                      aria-label="Gerenciar canal"
+                    >
+                      <MoreVertical size={14} />
+                    </button>
+
+                    {openChannelMenuId === channel.id && (
+                      <div className="absolute right-0 mt-1 w-36 bg-[var(--surface)] border border-brand-blue/20 shadow-brutal-sm shadow-brand-blue/30 z-20">
+                        <button
+                          type="button"
+                          onClick={() => openEditChannelModal(channel)}
+                          className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-blue-text hover:bg-brand-blue/5"
+                        >
+                          <Pencil size={12} /> Editar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => askDeleteChannel(channel)}
+                          className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-red hover:bg-brand-red/5"
+                        >
+                          <Trash2 size={12} /> Excluir
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               ))
             ) : (
               filteredUsers.map(u => (
@@ -582,6 +823,7 @@ export default function ChatDashboard() {
               const isMine = msg.senderId === user?.uid;
               const isDeleted = Boolean(msg.isDeleted);
               const isEdited = Boolean(msg.editedAt) && !isDeleted;
+              const canManage = canManageMessage(msg);
               
               return (
                 <div key={msg.id} className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} max-w-[90%] lg:max-w-[70%] ${isMine ? 'ml-auto' : 'mr-auto'}`}>
@@ -616,6 +858,12 @@ export default function ChatDashboard() {
                       <p className={`font-sans text-sm leading-relaxed whitespace-pre-wrap ${isDeleted ? 'italic opacity-80' : ''}`}>
                         {isDeleted ? 'Mensagem excluída' : msg.text}
                       </p>
+                      {msg.replyTo && !isDeleted && (
+                        <div className="mt-2 border-l-2 border-brand-gold/70 pl-2 py-1 bg-black/5">
+                          <p className="text-[10px] font-bold uppercase opacity-70">Resposta para {msg.replyTo.senderName}</p>
+                          <p className="text-[11px] opacity-80 truncate">{msg.replyTo.text}</p>
+                        </div>
+                      )}
                       {isEdited && (
                         <p className={`mt-1 text-[10px] italic ${subtleTextClass}`}>mensagem editada</p>
                       )}
@@ -639,17 +887,26 @@ export default function ChatDashboard() {
                           <div className="absolute right-0 mt-1 w-36 bg-[var(--surface)] border border-brand-blue/20 shadow-brutal-sm shadow-brand-blue/30 z-20">
                             <button
                               type="button"
-                              onClick={() => handleEditMessage(msg)}
+                              onClick={() => handleReplyMessage(msg)}
                               className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-blue-text hover:bg-brand-blue/5"
                             >
-                              <Pencil size={12} /> Editar
+                              <MessageCircle size={12} /> Responder
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleEditMessage(msg)}
+                              disabled={!canManage}
+                              className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-blue-text hover:bg-brand-blue/5 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >
+                              <Pencil size={12} /> {canManage ? 'Editar' : 'Editar (10 min)'}
                             </button>
                             <button
                               type="button"
                               onClick={() => handleDeleteMessage(msg)}
-                              className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-red hover:bg-brand-red/5"
+                              disabled={!canManage}
+                              className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-red hover:bg-brand-red/5 disabled:opacity-40 disabled:cursor-not-allowed"
                             >
-                              <Trash2 size={12} /> Excluir
+                              <Trash2 size={12} /> {canManage ? 'Excluir' : 'Excluir (10 min)'}
                             </button>
                           </div>
                         )}
@@ -659,7 +916,7 @@ export default function ChatDashboard() {
                 </div>
               );
             })}
-            {activeView?.type === 'dm' && typingUsers.length > 0 && (
+            {typingUsers.length > 0 && (
               <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.2em] text-brand-blue-text/70">
                 <div className="flex items-center gap-1">
                   {[0, 1, 2].map(dot => (
@@ -670,13 +927,35 @@ export default function ChatDashboard() {
                     />
                   ))}
                 </div>
-                <span>digitando...</span>
+                <span>
+                  {typingUsers
+                    .map((uid) => users.find((u) => u.uid === uid)?.displayName || 'Usuário')
+                    .slice(0, 2)
+                    .join(', ')}
+                  {typingUsers.length > 2 ? ' e outros' : ''} digitando...
+                </span>
               </div>
             )}
             <div ref={messagesEndRef} />
           </div>
 
           <div className="p-4 border-t-2 border-brand-blue/10 bg-[var(--surface)] relative">
+            {replyingTo && (
+              <div className="max-w-5xl mx-auto mb-3 p-2 border-l-2 border-brand-gold bg-brand-blue/5 flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[10px] font-bold uppercase text-brand-blue-text/70">Respondendo {replyingTo.senderName}</p>
+                  <p className="text-xs text-brand-blue-text truncate">{replyingTo.text}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setReplyingTo(null)}
+                  className="text-brand-blue-text/50 hover:text-brand-red"
+                  aria-label="Cancelar resposta"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )}
             
             {showEmojiPicker && (
               <div className="absolute bottom-full left-4 mb-2 bg-[var(--surface)] border-2 border-brand-blue p-2 shadow-brutal-md shadow-brand-gold grid grid-cols-8 gap-1 z-50">
@@ -784,6 +1063,98 @@ export default function ChatDashboard() {
                 className="px-3 py-2 text-xs font-bold bg-brand-red text-white hover:opacity-90"
               >
                 Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingDeleteChannel && (
+        <div className="fixed inset-0 z-[80] bg-brand-blue/35 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[var(--surface)] border-2 border-brand-blue shadow-brutal-md shadow-brand-gold p-5">
+            <h4 className="font-display font-bold uppercase text-sm text-brand-blue-text">Excluir canal?</h4>
+            <p className="mt-2 text-xs text-brand-blue-text/80">Canal: {pendingDeleteChannel.name}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingDeleteChannel(null)}
+                className="px-3 py-2 text-xs font-bold border border-brand-blue/20 text-brand-blue-text hover:bg-brand-blue/5"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteChannel}
+                className="px-3 py-2 text-xs font-bold bg-brand-red text-white hover:opacity-90"
+              >
+                Excluir canal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isClearChannelsConfirmOpen && (
+        <div className="fixed inset-0 z-[80] bg-brand-blue/35 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[var(--surface)] border-2 border-brand-blue shadow-brutal-md shadow-brand-gold p-5">
+            <h4 className="font-display font-bold uppercase text-sm text-brand-blue-text">Limpar todos os canais?</h4>
+            <p className="mt-2 text-xs text-brand-blue-text/80">Esta ação remove todos os canais existentes.</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsClearChannelsConfirmOpen(false)}
+                className="px-3 py-2 text-xs font-bold border border-brand-blue/20 text-brand-blue-text hover:bg-brand-blue/5"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmClearChannels}
+                className="px-3 py-2 text-xs font-bold bg-brand-red text-white hover:opacity-90"
+              >
+                Limpar canais
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isChannelModalOpen && (
+        <div className="fixed inset-0 z-[80] bg-brand-blue/35 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-[var(--surface)] border-2 border-brand-blue shadow-brutal-md shadow-brand-gold p-5">
+            <h4 className="font-display font-bold uppercase text-sm text-brand-blue-text">
+              {editingChannel ? 'Editar canal' : 'Novo canal'}
+            </h4>
+
+            <div className="mt-3 space-y-3">
+              <input
+                value={channelNameInput}
+                onChange={(e) => setChannelNameInput(e.target.value)}
+                placeholder="Nome do canal"
+                className="w-full bg-[var(--bg)] border-2 border-brand-blue/20 p-3 text-sm text-brand-blue-text outline-none focus:border-brand-blue"
+              />
+              <textarea
+                value={channelDescriptionInput}
+                onChange={(e) => setChannelDescriptionInput(e.target.value)}
+                placeholder="Descrição (opcional)"
+                className="w-full min-h-[96px] bg-[var(--bg)] border-2 border-brand-blue/20 p-3 text-sm text-brand-blue-text outline-none focus:border-brand-blue"
+              />
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeChannelModal}
+                className="px-3 py-2 text-xs font-bold border border-brand-blue/20 text-brand-blue-text hover:bg-brand-blue/5"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={saveChannel}
+                className="px-3 py-2 text-xs font-bold bg-brand-blue text-white hover:opacity-90"
+              >
+                {editingChannel ? 'Salvar canal' : 'Criar canal'}
               </button>
             </div>
           </div>
