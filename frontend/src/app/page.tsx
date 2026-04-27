@@ -13,10 +13,10 @@ export default function Home() {
   const { user } = useAuthStore();
   const router = useRouter();
 
-  // Redirecionar para o dashboard se já estiver logado (evita ficar preso na home em produção)
+  // Redirecionar para o chat se já estiver logado (evita ficar preso na home em produção)
   useEffect(() => {
     if (user) {
-      router.push('/dashboard');
+      router.push('/chat');
     }
   }, [user, router]);
 

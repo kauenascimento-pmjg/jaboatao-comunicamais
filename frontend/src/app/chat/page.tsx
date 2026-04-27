@@ -4,14 +4,15 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Send, Hash, MessageCircle, Users, Search, 
   X, ChevronRight, Menu, Sun, Moon, LogOut,
-  Paperclip, Image as ImageIcon, Film, FileText, Smile, Trash2, Check, CheckCheck, MoreVertical, Pencil, Plus
+  Paperclip, Image as ImageIcon, FileText, Smile, Trash2, Check, CheckCheck, MoreVertical, Pencil, Plus
 } from 'lucide-react';
 import { useAuthStore } from '@/lib/authStore';
 import { useTheme } from '@/components/providers/ThemeProvider';
 import { auth } from '@/lib/firebase';
 import { signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
-// Chat Dashboard functionality for Communica+ Jaboatão
+import Image from 'next/image';
+// Chat functionality for Communica+ Jaboatão
 import {
   getChannels, subscribeToMessages, sendMessage,
   getOrCreateDm, subscribeToDmMessages, sendDmMessage,
@@ -23,7 +24,7 @@ import {
 
 type ActiveView = { type: 'channel'; id: string; name: string } | { type: 'dm'; id: string; name: string; otherUid: string };
 
-export default function ChatDashboard() {
+export default function ChatPage() {
   const { user, setUser } = useAuthStore();
   const { theme, toggle } = useTheme();
   const router = useRouter();
@@ -841,7 +842,14 @@ export default function ChatDashboard() {
                       {!isDeleted && msg.fileUrl && (
                         <div className="mb-3 rounded overflow-hidden bg-black/5 dark:bg-white/5 p-1 max-w-sm">
                           {msg.fileType?.startsWith('image/') ? (
-                            <img src={msg.fileUrl} alt={msg.fileName} className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90" onClick={() => window.open(msg.fileUrl, '_blank')} />
+                            <Image 
+                              src={msg.fileUrl} 
+                              alt={msg.fileName || 'Imagem'} 
+                              width={400}
+                              height={300}
+                              className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90" 
+                              onClick={() => window.open(msg.fileUrl, '_blank')} 
+                            />
                           ) : msg.fileType?.startsWith('video/') ? (
                             <video src={msg.fileUrl} controls className="max-w-full rounded" />
                           ) : (
@@ -872,7 +880,7 @@ export default function ChatDashboard() {
                   <div className={`mt-1.5 px-1 flex items-center gap-2 ${isMine ? 'justify-end' : 'justify-start'}`}>
                     {renderMessageStatus(msg, isMine)}
 
-                    {isMine && !isDeleted && (
+                    {!isDeleted && (
                       <div className="relative">
                         <button
                           type="button"
@@ -884,7 +892,9 @@ export default function ChatDashboard() {
                         </button>
 
                         {openMessageMenuId === msg.id && (
-                          <div className="absolute right-0 mt-1 w-36 bg-[var(--surface)] border border-brand-blue/20 shadow-brutal-sm shadow-brand-blue/30 z-20">
+                          <div className={`bottom-full mb-1 w-36 bg-[var(--surface)] border border-brand-blue/20 shadow-brutal-sm shadow-brand-blue/30 z-20 ${
+                            isMine ? 'absolute right-0' : 'absolute left-0'
+                          }`}>
                             <button
                               type="button"
                               onClick={() => handleReplyMessage(msg)}
@@ -892,22 +902,26 @@ export default function ChatDashboard() {
                             >
                               <MessageCircle size={12} /> Responder
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleEditMessage(msg)}
-                              disabled={!canManage}
-                              className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-blue-text hover:bg-brand-blue/5 disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                              <Pencil size={12} /> {canManage ? 'Editar' : 'Editar (10 min)'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteMessage(msg)}
-                              disabled={!canManage}
-                              className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-red hover:bg-brand-red/5 disabled:opacity-40 disabled:cursor-not-allowed"
-                            >
-                              <Trash2 size={12} /> {canManage ? 'Excluir' : 'Excluir (10 min)'}
-                            </button>
+                            {isMine && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditMessage(msg)}
+                                  disabled={!canManage}
+                                  className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-blue-text hover:bg-brand-blue/5 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                  <Pencil size={12} /> {canManage ? 'Editar' : 'Editar (10 min)'}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteMessage(msg)}
+                                  disabled={!canManage}
+                                  className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-red hover:bg-brand-red/5 disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                  <Trash2 size={12} /> {canManage ? 'Excluir' : 'Excluir (10 min)'}
+                                </button>
+                              </>
+                            )}
                           </div>
                         )}
                       </div>

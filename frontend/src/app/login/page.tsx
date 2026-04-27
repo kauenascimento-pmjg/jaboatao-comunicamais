@@ -109,7 +109,7 @@ export default function LoginPage() {
       
       // 5. Salvar usuário e redirecionar
       setUser(adUser);
-      router.push('/dashboard');
+      router.push('/chat');
       
     } catch (err) {
       console.error('Erro no login:', err);
