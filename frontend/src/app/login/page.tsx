@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { FirebaseError } from 'firebase/app';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
@@ -20,6 +21,20 @@ export default function LoginPage() {
   const { setUser }             = useAuthStore();
   const router = useRouter();
 
+  const getBackendBaseUrl = () => {
+    const configuredUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+
+    if (configuredUrl && !/localhost|127\.0\.0\.1/i.test(configuredUrl)) {
+      return configuredUrl;
+    }
+
+    if (typeof window !== 'undefined') {
+      return `${window.location.protocol}//${window.location.hostname}:4000`;
+    }
+
+    return configuredUrl || 'http://localhost:4000';
+  };
+
   /** Cria ou loga no Firebase Auth com email/senha após validação AD */
   const signInToFirebase = async (firebaseEmail: string, firebasePassword: string, displayName: string) => {
     try {
@@ -30,8 +45,8 @@ export default function LoginPage() {
         await updateProfile(cred.user, { displayName });
       }
       return cred;
-    } catch (err: any) {
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
+    } catch (err: unknown) {
+      if (err instanceof FirebaseError && (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential')) {
         // Primeiro login — criar usuário no Firebase Auth
         const cred = await createUserWithEmailAndPassword(auth, firebaseEmail, firebasePassword);
         await updateProfile(cred.user, { displayName });
@@ -48,7 +63,7 @@ export default function LoginPage() {
 
     try {
       // 1. Validar credenciais via AD (Backend)
-      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/auth/ad`, {
+      const response = await fetch(`${getBackendBaseUrl()}/api/auth/ad`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user: email.split('@')[0], password }),

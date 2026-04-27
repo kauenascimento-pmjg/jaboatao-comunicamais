@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Send, Hash, MessageCircle, Users, Search, 
   X, ChevronRight, Menu, Sun, Moon, LogOut,
-  Paperclip, Image as ImageIcon, Film, FileText, Smile, Trash2 
+  Paperclip, Image as ImageIcon, Film, FileText, Smile, Trash2, Check, CheckCheck, MoreVertical, Pencil
 } from 'lucide-react';
 import { useAuthStore } from '@/lib/authStore';
 import { useTheme } from '@/components/providers/ThemeProvider';
@@ -14,9 +14,9 @@ import { useRouter } from 'next/navigation';
 // Chat Dashboard functionality for Communica+ Jaboatão
 import {
   getChannels, subscribeToMessages, sendMessage,
-  getAllUsers, getOrCreateDm, subscribeToDmMessages, sendDmMessage,
+  getOrCreateDm, subscribeToDmMessages, sendDmMessage,
   seedDefaultChannels, uploadFile,
-  deleteChannelMessage, deleteDmMessage, setTypingStatus, subscribeToTypingStatus,
+  deleteChannelMessage, deleteDmMessage, updateChannelMessage, updateDmMessage, setTypingStatus, subscribeToTypingStatus, updateDmMessagesStatus, subscribeToUsers, setUserPresence,
   Channel, Message, UserProfile,
 } from '@/lib/chatService';
 
@@ -32,6 +32,12 @@ export default function ChatDashboard() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [activeView, setActiveView] = useState<ActiveView | null>(null);
   const [newMessage, setNewMessage] = useState('');
+  const [openMessageMenuId, setOpenMessageMenuId] = useState<string | null>(null);
+  const [pendingDeleteMessage, setPendingDeleteMessage] = useState<Message | null>(null);
+  const [editingMessage, setEditingMessage] = useState<Message | null>(null);
+  const [editingText, setEditingText] = useState('');
+  const [pendingFileToSend, setPendingFileToSend] = useState<File | null>(null);
+  const [chatNotice, setChatNotice] = useState<string | null>(null);
   const [typingUsers, setTypingUsers] = useState<string[]>([]);
   const [sidePanel, setSidePanel] = useState<'channels' | 'directory'>('channels');
   const [searchQuery, setSearchQuery] = useState('');
@@ -44,6 +50,7 @@ export default function ChatDashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isTypingRef = useRef(false);
+  const PRESENCE_STALE_MS = 45000;
 
   // Load channels and users
   useEffect(() => {
@@ -54,12 +61,46 @@ export default function ChatDashboard() {
       if (data.length > 0 && !activeView) {
         setActiveView({ type: 'channel', id: data[0].id, name: data[0].name });
       }
-      const usersList = await getAllUsers();
-      setUsers(usersList);
     };
     loadData();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeToUsers((usersList) => {
+      setUsers(usersList);
+    });
+
+    return () => unsubscribe?.();
+  }, []);
+
+  useEffect(() => {
+    if (!user?.uid) return;
+
+    setUserPresence(user.uid, true).catch(() => undefined);
+
+    const heartbeat = setInterval(() => {
+      setUserPresence(user.uid, true).catch(() => undefined);
+    }, 30000);
+
+    const handleVisibility = () => {
+      setUserPresence(user.uid, !document.hidden).catch(() => undefined);
+    };
+
+    const handleBeforeUnload = () => {
+      setUserPresence(user.uid, false).catch(() => undefined);
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      clearInterval(heartbeat);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      setUserPresence(user.uid, false).catch(() => undefined);
+    };
+  }, [user?.uid]);
 
   // Subscribe to messages and typing state for DMs
   useEffect(() => {
@@ -94,6 +135,34 @@ export default function ChatDashboard() {
       }
     };
   }, [activeView, user]);
+
+  useEffect(() => {
+    if (!activeView || activeView.type !== 'dm' || !user || messages.length === 0) return;
+
+    const incomingMessages = messages.filter((msg) => msg.senderId !== user.uid);
+    const toDeliver = incomingMessages
+      .filter((msg) => !(msg.deliveredTo || []).includes(user.uid))
+      .map((msg) => msg.id);
+    const toRead = incomingMessages
+      .filter((msg) => !(msg.readBy || []).includes(user.uid))
+      .map((msg) => msg.id);
+
+    if (toDeliver.length > 0) {
+      updateDmMessagesStatus(activeView.id, toDeliver, user.uid, 'delivered').catch((err) => {
+        console.error('Delivery status error:', err);
+      });
+    }
+
+    if (toRead.length === 0) return;
+
+    const timer = setTimeout(() => {
+      updateDmMessagesStatus(activeView.id, toRead, user.uid, 'read').catch((err) => {
+        console.error('Read status error:', err);
+      });
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [activeView, messages, user]);
 
   const openDm = useCallback(async (otherUser: UserProfile) => {
     if (!user) return;
@@ -139,40 +208,108 @@ export default function ChatDashboard() {
 
   const handleDeleteMessage = async (msg: Message) => {
     if (!activeView || !user || msg.senderId !== user.uid) return;
+    setPendingDeleteMessage(msg);
+    setOpenMessageMenuId(null);
+  };
+
+  const confirmDeleteMessage = async () => {
+    if (!activeView || !pendingDeleteMessage) return;
 
     try {
       if (activeView.type === 'channel') {
-        await deleteChannelMessage(activeView.id, msg.id);
+        await deleteChannelMessage(activeView.id, pendingDeleteMessage.id);
       } else {
-        await deleteDmMessage(activeView.id, msg.id);
+        await deleteDmMessage(activeView.id, pendingDeleteMessage.id);
       }
+      setPendingDeleteMessage(null);
     } catch (err) {
       console.error('Delete message error:', err);
-      alert('Não foi possível excluir a mensagem. Por favor, tente novamente.');
+      setChatNotice('Não foi possível excluir a mensagem. Tente novamente.');
     }
   };
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !activeView || !user) return;
+  const handleEditMessage = (msg: Message) => {
+    if (!activeView || !user || msg.senderId !== user.uid) return;
+    setEditingMessage(msg);
+    setEditingText(msg.text);
+    setOpenMessageMenuId(null);
+  };
+
+  const confirmEditMessage = async () => {
+    if (!activeView || !editingMessage) return;
+
+    const normalizedText = editingText.trim();
+    if (!normalizedText || normalizedText === editingMessage.text) {
+      setEditingMessage(null);
+      return;
+    }
+
+    try {
+      if (activeView.type === 'channel') {
+        await updateChannelMessage(activeView.id, editingMessage.id, normalizedText);
+      } else {
+        await updateDmMessage(activeView.id, editingMessage.id, normalizedText);
+      }
+      setEditingMessage(null);
+      setEditingText('');
+    } catch (err) {
+      console.error('Edit message error:', err);
+      setChatNotice('Não foi possível editar a mensagem. Tente novamente.');
+    }
+  };
+
+  const sendUploadedFile = useCallback(async (file: File) => {
+    if (!activeView || !user) return;
 
     try {
       setIsUploading(true);
       const fileData = await uploadFile(file);
       const senderName = user.displayName || 'Servidor';
-      
+
       if (activeView.type === 'channel') {
         await sendMessage(activeView.id, `📎 Enviou um arquivo: ${file.name}`, senderName, user.uid, fileData);
       } else {
         await sendDmMessage(activeView.id, `📎 Enviou um arquivo: ${file.name}`, senderName, user.uid, fileData);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'erro desconhecido';
       console.error('Upload error:', err);
-      alert(`Falha ao enviar arquivo: ${err.message}`);
+      setChatNotice(`Falha ao enviar arquivo: ${message}`);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
+  }, [activeView, user]);
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setPendingFileToSend(file);
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (isUploading) return;
+
+    const clipboardItems = Array.from(e.clipboardData.items || []);
+    const imageItem = clipboardItems.find((item) => item.type.startsWith('image/'));
+    if (!imageItem) return;
+
+    const imageFile = imageItem.getAsFile();
+    if (!imageFile) return;
+
+    e.preventDefault();
+
+    const ext = imageFile.type.split('/')[1] || 'png';
+    const fileName = `print_${Date.now()}.${ext}`;
+    const fileToUpload = new File([imageFile], fileName, { type: imageFile.type });
+    setPendingFileToSend(fileToUpload);
+  };
+
+  const confirmSendFile = async () => {
+    if (!pendingFileToSend) return;
+    const file = pendingFileToSend;
+    setPendingFileToSend(null);
+    await sendUploadedFile(file);
   };
 
   const addEmoji = (emoji: string) => {
@@ -201,6 +338,9 @@ export default function ChatDashboard() {
   };
 
   const logout = async () => {
+    if (user?.uid) {
+      await setUserPresence(user.uid, false).catch(() => undefined);
+    }
     await signOut(auth);
     setUser(null);
     router.push('/');
@@ -212,6 +352,62 @@ export default function ChatDashboard() {
     u.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     u.email?.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const getLastSeenDate = (userProfile: UserProfile) => {
+    return userProfile.lastSeen?.toDate ? userProfile.lastSeen.toDate() : null;
+  };
+
+  const isUserActuallyOnline = (userProfile: UserProfile) => {
+    const seenDate = getLastSeenDate(userProfile);
+    if (!userProfile.isOnline || !seenDate) return false;
+    return Date.now() - seenDate.getTime() <= PRESENCE_STALE_MS;
+  };
+
+  const formatLastSeen = (userProfile: UserProfile) => {
+    if (isUserActuallyOnline(userProfile)) return 'online';
+    const seenDate = getLastSeenDate(userProfile);
+    if (!seenDate) return 'offline';
+    return `visto ${seenDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  };
+
+  const subtleTextClass = theme === 'dark' ? 'text-white/70' : 'text-brand-blue-text/60';
+  const checkDefaultClass = theme === 'dark' ? 'text-white/70' : 'text-brand-blue-text/60';
+  const menuButtonClass = theme === 'dark' ? 'text-white/75 hover:text-white' : 'text-brand-blue hover:text-brand-blue-text';
+
+  const renderMessageStatus = (msg: Message, isMine: boolean) => {
+    const time = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
+    if (!isMine || activeView?.type !== 'dm') {
+      return <span className={`text-[8px] font-bold uppercase ${subtleTextClass}`}>{time}</span>;
+    }
+
+    const otherUid = activeView.otherUid;
+    const isRead = (msg.readBy || []).includes(otherUid);
+    const isDelivered = (msg.deliveredTo || []).includes(otherUid);
+
+    return (
+      <div className="flex items-center gap-1">
+        <span className={`text-[8px] font-bold uppercase ${subtleTextClass}`}>{time}</span>
+        {isRead ? (
+          <CheckCheck size={12} className="text-sky-500" aria-label="Visualizada" />
+        ) : isDelivered ? (
+          <CheckCheck size={12} className={checkDefaultClass} aria-label="Recebida" />
+        ) : (
+          <Check size={12} className={checkDefaultClass} aria-label="Enviada" />
+        )}
+      </div>
+    );
+  };
+
+  useEffect(() => {
+    setOpenMessageMenuId(null);
+  }, [activeView]);
+
+  useEffect(() => {
+    if (!chatNotice) return;
+    const timer = setTimeout(() => setChatNotice(null), 3200);
+    return () => clearTimeout(timer);
+  }, [chatNotice]);
 
   return (
     <div className="flex-1 h-full flex flex-col bg-[var(--bg)] overflow-hidden relative">
@@ -340,7 +536,17 @@ export default function ChatDashboard() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-bold truncate">{u.displayName || u.email}</p>
-                    <p className="text-[10px] opacity-60 uppercase font-bold tracking-tighter">{u.department || 'Servidor'}</p>
+                    {(() => {
+                      const isOnline = isUserActuallyOnline(u);
+                      return (
+                    <div className="flex items-center gap-1.5">
+                      <span className={`h-1.5 w-1.5 rounded-full ${isOnline ? 'bg-brand-green' : 'bg-brand-blue-text/30'}`} />
+                      <p className={`text-[10px] font-bold tracking-tighter ${isOnline ? 'text-brand-green uppercase' : 'text-brand-blue-text/50'}`}>
+                        {isOnline ? 'online' : formatLastSeen(u)}
+                      </p>
+                    </div>
+                      );
+                    })()}
                   </div>
                   <ChevronRight size={12} className="opacity-40" />
                 </button>
@@ -374,7 +580,8 @@ export default function ChatDashboard() {
 
             {messages.map((msg) => {
               const isMine = msg.senderId === user?.uid;
-              const time = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+              const isDeleted = Boolean(msg.isDeleted);
+              const isEdited = Boolean(msg.editedAt) && !isDeleted;
               
               return (
                 <div key={msg.id} className={`flex flex-col ${isMine ? 'items-end' : 'items-start'} max-w-[90%] lg:max-w-[70%] ${isMine ? 'ml-auto' : 'mr-auto'}`}>
@@ -389,7 +596,7 @@ export default function ChatDashboard() {
                         : 'bg-[var(--bg)] border-2 border-brand-blue/20 text-brand-blue-text shadow-brand-blue/5'}
                     `}>
                       {/* Renderização de Media */}
-                      {msg.fileUrl && (
+                      {!isDeleted && msg.fileUrl && (
                         <div className="mb-3 rounded overflow-hidden bg-black/5 dark:bg-white/5 p-1 max-w-sm">
                           {msg.fileType?.startsWith('image/') ? (
                             <img src={msg.fileUrl} alt={msg.fileName} className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90" onClick={() => window.open(msg.fileUrl, '_blank')} />
@@ -406,20 +613,49 @@ export default function ChatDashboard() {
                           )}
                         </div>
                       )}
-                      <p className="font-sans text-sm leading-relaxed whitespace-pre-wrap">{msg.text}</p>
+                      <p className={`font-sans text-sm leading-relaxed whitespace-pre-wrap ${isDeleted ? 'italic opacity-80' : ''}`}>
+                        {isDeleted ? 'Mensagem excluída' : msg.text}
+                      </p>
+                      {isEdited && (
+                        <p className={`mt-1 text-[10px] italic ${subtleTextClass}`}>mensagem editada</p>
+                      )}
                     </div>
-                    {isMine && (
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteMessage(msg)}
-                        className="absolute top-2 right-2 p-1 rounded-full text-brand-blue-text/60 hover:text-brand-red transition-colors"
-                        aria-label="Excluir mensagem"
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                  </div>
+                  <div className={`mt-1.5 px-1 flex items-center gap-2 ${isMine ? 'justify-end' : 'justify-start'}`}>
+                    {renderMessageStatus(msg, isMine)}
+
+                    {isMine && !isDeleted && (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onClick={() => setOpenMessageMenuId((prev) => (prev === msg.id ? null : msg.id))}
+                          className={`p-1 rounded-full transition-colors ${menuButtonClass}`}
+                          aria-label="Mais opções da mensagem"
+                        >
+                          <MoreVertical size={14} />
+                        </button>
+
+                        {openMessageMenuId === msg.id && (
+                          <div className="absolute right-0 mt-1 w-36 bg-[var(--surface)] border border-brand-blue/20 shadow-brutal-sm shadow-brand-blue/30 z-20">
+                            <button
+                              type="button"
+                              onClick={() => handleEditMessage(msg)}
+                              className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-blue-text hover:bg-brand-blue/5"
+                            >
+                              <Pencil size={12} /> Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteMessage(msg)}
+                              className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-red hover:bg-brand-red/5"
+                            >
+                              <Trash2 size={12} /> Excluir
+                            </button>
+                          </div>
+                        )}
+                      </div>
                     )}
                   </div>
-                  <span className="text-[8px] font-bold text-white/70 uppercase mt-1.5 px-1">{time}</span>
                 </div>
               );
             })}
@@ -459,6 +695,7 @@ export default function ChatDashboard() {
                   type="text"
                   value={newMessage}
                   onChange={handleNewMessageChange}
+                  onPaste={handlePaste}
                   onBlur={stopTyping}
                   placeholder={isUploading ? 'Enviando...' : 'Escreva sua mensagem...'}
                   disabled={isUploading}
@@ -493,6 +730,94 @@ export default function ChatDashboard() {
           </div>
         </div>
       </div>
+
+      {chatNotice && (
+        <div className="fixed bottom-5 right-5 z-[70] bg-brand-red text-white px-4 py-3 text-xs font-bold shadow-brutal-sm shadow-brand-blue max-w-xs">
+          {chatNotice}
+        </div>
+      )}
+
+      {pendingFileToSend && (
+        <div className="fixed inset-0 z-[80] bg-brand-blue/35 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[var(--surface)] border-2 border-brand-blue shadow-brutal-md shadow-brand-gold p-5">
+            <h4 className="font-display font-bold uppercase text-sm text-brand-blue-text">Enviar anexo?</h4>
+            <p className="mt-2 text-xs text-brand-blue-text/80 break-all">
+              {pendingFileToSend.name}
+            </p>
+            <p className="mt-1 text-[11px] text-brand-blue-text/60">Tipo: {pendingFileToSend.type || 'arquivo'}</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingFileToSend(null)}
+                className="px-3 py-2 text-xs font-bold border border-brand-blue/20 text-brand-blue-text hover:bg-brand-blue/5"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmSendFile}
+                className="px-3 py-2 text-xs font-bold bg-brand-blue text-white hover:opacity-90"
+              >
+                Confirmar envio
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingDeleteMessage && (
+        <div className="fixed inset-0 z-[80] bg-brand-blue/35 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-[var(--surface)] border-2 border-brand-blue shadow-brutal-md shadow-brand-gold p-5">
+            <h4 className="font-display font-bold uppercase text-sm text-brand-blue-text">Excluir mensagem?</h4>
+            <p className="mt-2 text-xs text-brand-blue-text/80">Ela continuará no histórico como “Mensagem excluída”.</p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPendingDeleteMessage(null)}
+                className="px-3 py-2 text-xs font-bold border border-brand-blue/20 text-brand-blue-text hover:bg-brand-blue/5"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteMessage}
+                className="px-3 py-2 text-xs font-bold bg-brand-red text-white hover:opacity-90"
+              >
+                Excluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingMessage && (
+        <div className="fixed inset-0 z-[80] bg-brand-blue/35 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-[var(--surface)] border-2 border-brand-blue shadow-brutal-md shadow-brand-gold p-5">
+            <h4 className="font-display font-bold uppercase text-sm text-brand-blue-text">Editar mensagem</h4>
+            <textarea
+              value={editingText}
+              onChange={(e) => setEditingText(e.target.value)}
+              className="mt-3 w-full min-h-[120px] bg-[var(--bg)] border-2 border-brand-blue/20 p-3 text-sm text-brand-blue-text outline-none focus:border-brand-blue"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { setEditingMessage(null); setEditingText(''); }}
+                className="px-3 py-2 text-xs font-bold border border-brand-blue/20 text-brand-blue-text hover:bg-brand-blue/5"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmEditMessage}
+                className="px-3 py-2 text-xs font-bold bg-brand-blue text-white hover:opacity-90"
+              >
+                Salvar edição
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { db, storage } from './firebase';
-import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs, updateDoc, arrayUnion, deleteField } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot, StorageError } from 'firebase/storage';
 import { User } from 'firebase/auth';
 import { ADUser } from './authStore';
@@ -11,12 +11,17 @@ export type Message = {
   text: string;
   senderName: string;
   senderId: string;
+  deliveredTo?: string[];
+  readBy?: string[];
+  isDeleted?: boolean;
   channelId?: string;
   dmId?: string;
   fileUrl?: string;
   fileType?: string;
   fileName?: string;
   createdAt: { toDate: () => Date } | null;
+  editedAt?: { toDate: () => Date } | null;
+  deletedAt?: { toDate: () => Date } | null;
 };
 
 export type Channel = {
@@ -32,6 +37,8 @@ export type UserProfile = {
   displayName: string;
   department?: string;
   role?: string;
+  isOnline?: boolean;
+  lastSeen?: { toDate: () => Date } | null;
   photoURL?: string;
   adUsername?: string;
   createdAt?: unknown;
@@ -127,6 +134,30 @@ export async function getAllUsers(): Promise<UserProfile[]> {
   }
 }
 
+export function subscribeToUsers(callback: (users: UserProfile[]) => void) {
+  const usersCollection = collection(db, 'users');
+  return onSnapshot(usersCollection, (snapshot) => {
+    const users: UserProfile[] = [];
+    snapshot.forEach((docSnap) => users.push({ uid: docSnap.id, ...docSnap.data() } as UserProfile));
+    callback(users);
+  });
+}
+
+export async function setUserPresence(uid: string, isOnline: boolean) {
+  if (!uid) return;
+
+  try {
+    await setDoc(doc(db, 'users', uid), {
+      uid,
+      isOnline,
+      lastSeen: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    console.error('Error updating user presence:', error);
+  }
+}
+
 // ─── CHANNELS ─────────────────────────────────────────────────────────────────
 
 const DEFAULT_CHANNELS = [
@@ -203,18 +234,56 @@ export async function sendMessage(
 
 export async function deleteChannelMessage(channelId: string, messageId: string) {
   try {
-    await deleteDoc(doc(db, 'channels', channelId, 'messages', messageId));
+    await updateDoc(doc(db, 'channels', channelId, 'messages', messageId), {
+      isDeleted: true,
+      text: 'Mensagem excluída',
+      fileUrl: deleteField(),
+      fileType: deleteField(),
+      fileName: deleteField(),
+      deletedAt: serverTimestamp(),
+    });
   } catch (error) {
     console.error('Error deleting channel message:', error);
     throw error;
   }
 }
 
+export async function updateChannelMessage(channelId: string, messageId: string, text: string) {
+  try {
+    await updateDoc(doc(db, 'channels', channelId, 'messages', messageId), {
+      text,
+      editedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.error('Error updating channel message:', error);
+    throw error;
+  }
+}
+
 export async function deleteDmMessage(dmId: string, messageId: string) {
   try {
-    await deleteDoc(doc(db, 'direct_messages', dmId, 'messages', messageId));
+    await updateDoc(doc(db, 'direct_messages', dmId, 'messages', messageId), {
+      isDeleted: true,
+      text: 'Mensagem excluída',
+      fileUrl: deleteField(),
+      fileType: deleteField(),
+      fileName: deleteField(),
+      deletedAt: serverTimestamp(),
+    });
   } catch (error) {
     console.error('Error deleting dm message:', error);
+    throw error;
+  }
+}
+
+export async function updateDmMessage(dmId: string, messageId: string, text: string) {
+  try {
+    await updateDoc(doc(db, 'direct_messages', dmId, 'messages', messageId), {
+      text,
+      editedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    console.error('Error updating dm message:', error);
     throw error;
   }
 }
@@ -287,6 +356,8 @@ export async function sendDmMessage(
     senderName,
     senderId,
     dmId,
+    deliveredTo: [senderId],
+    readBy: [senderId],
     ...(fileData && {
       fileUrl: fileData.url,
       fileType: fileData.type,
@@ -294,4 +365,23 @@ export async function sendDmMessage(
     }),
     createdAt: serverTimestamp(),
   });
+}
+
+export async function updateDmMessagesStatus(
+  dmId: string,
+  messageIds: string[],
+  userId: string,
+  status: 'delivered' | 'read'
+) {
+  if (!messageIds.length) return;
+
+  const fieldName = status === 'read' ? 'readBy' : 'deliveredTo';
+
+  await Promise.all(
+    messageIds.map((messageId) =>
+      updateDoc(doc(db, 'direct_messages', dmId, 'messages', messageId), {
+        [fieldName]: arrayUnion(userId),
+      })
+    )
+  );
 }
