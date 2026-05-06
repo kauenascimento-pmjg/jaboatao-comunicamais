@@ -1,4 +1,5 @@
 import admin from 'firebase-admin';
+import { getFirestore as getAdminFirestore } from 'firebase-admin/firestore';
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
@@ -68,7 +69,7 @@ export function initFirebase() {
 // Lazy getters
 export const getFirestore = () => {
   const dbId = process.env.FIREBASE_DATABASE_ID || 'comunica-mais';
-  return admin.firestore(dbId);
+  return getAdminFirestore(admin.app(), dbId);
 };
 export const getAuth = () => admin.auth();
 export const canSignTokens = () => canSign;

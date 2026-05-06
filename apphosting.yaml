@@ -1,0 +1,22 @@
+# Firebase App Hosting Configuration
+# Documentation: https://firebase.google.com/docs/app-hosting/configure
+
+kind: "AppHostingYaml"
+schemaVersion: "v1"
+
+# Caminho para a pasta do frontend
+rootDirectory: "frontend"
+
+runConfig:
+  minInstances: 0
+  maxInstances: 10
+  concurrency: 80
+
+# Variáveis de Ambiente (Devem ser configuradas também no Console do Firebase para segurança)
+env:
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: "pmjg-apps-hmol"
+  - variable: NEXT_PUBLIC_FIREBASE_DATABASE_ID
+    value: "comunica-mais-jaboatao"
+  - variable: NEXT_PUBLIC_BACKEND_URL
+    value: "https://seu-backend-no-cloud-run.a.run.app" # Ajustaremos depois

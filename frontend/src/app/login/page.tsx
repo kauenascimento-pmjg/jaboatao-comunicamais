@@ -1,12 +1,11 @@
 'use client';
 
 import React, { useState } from 'react';
-import { FirebaseError } from 'firebase/app';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, ADUser } from '@/lib/authStore';
-import { Eye, EyeOff, AlertCircle, ShieldCheck, ArrowLeft, Moon, Sun } from 'lucide-react';
+import { Eye, EyeOff, AlertCircle, Moon, Sun } from 'lucide-react';
 import { useTheme } from '@/components/providers/ThemeProvider';
 import { syncUserToFirestore } from '@/lib/chatService';
 
@@ -35,15 +34,17 @@ export default function LoginPage() {
 
     try {
       return await signInWithEmailAndPassword(auth, techEmail, techPassword);
-    } catch (err: any) {
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') {
+    } catch (err) {
+      const error = err as { code?: string };
+      if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password') {
         try {
           const cred = await createUserWithEmailAndPassword(auth, techEmail, techPassword);
           await updateProfile(cred.user, { displayName });
           return cred;
-        } catch (createErr: any) {
+        } catch (createErr) {
+          const createError = createErr as { code?: string };
           // Se ainda der erro de e-mail em uso (raro com domínio interno), tentamos logar com a senha digitada
-          if (createErr.code === 'auth/email-already-in-use') {
+          if (createError.code === 'auth/email-already-in-use') {
              return await signInWithEmailAndPassword(auth, techEmail, techPassword);
           }
           throw createErr;
