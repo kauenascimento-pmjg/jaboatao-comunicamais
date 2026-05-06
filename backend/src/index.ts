@@ -83,15 +83,7 @@ app.post('/api/auth/ad', async (req, res) => {
     const apiUser = data.user || {};
     const uid = apiUser.username || apiUser.user || user;
 
-    // Sync user to Firestore via backend (best effort)
-    syncUserToFirestore({
-      uid,
-      email: apiUser.email || `${uid}@jaboatao.pe.gov.br`,
-      displayName: apiUser.full_name || apiUser.nome_completo || apiUser.nome || uid,
-      department: apiUser.department || 'Geral'
-    }).catch(err => console.error('Failed to auto-sync user:', err));
-
-    // Retorna dados do usuário — Frontend usa Anonymous Auth para sessão Firebase
+    // Retorna dados do usuário — Frontend gerenciará a sessão Firebase
     res.json({ success: true, user: apiUser, uid });
   } catch (error) {
     console.error('Backend Proxy Auth Error:', error);

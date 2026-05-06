@@ -67,13 +67,18 @@ export default function ChatPage() {
 
   // Load channels and users
   useEffect(() => {
+    if (!user) return; // Espera o usuário estar logado
+
     const loadData = async () => {
-      const data = await getChannels();
-      setChannels(data);
+      try {
+        const data = await getChannels();
+        setChannels(data);
+      } catch (err) {
+        console.error('Falha ao carregar canais:', err);
+      }
     };
     loadData();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [user]); // Re-executa quando o usuário mudar (login/logout)
 
   useEffect(() => {
     if (channels.length === 0) {
@@ -95,12 +100,14 @@ export default function ChatPage() {
   }, [channels, activeView]);
 
   useEffect(() => {
+    if (!user) return; // Guard
+
     const unsubscribe = subscribeToUsers((usersList) => {
       setUsers(usersList);
     });
 
     return () => unsubscribe?.();
-  }, []);
+  }, [user]);
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -546,7 +553,21 @@ export default function ChatPage() {
     if (isUserActuallyOnline(userProfile)) return 'online';
     const seenDate = getLastSeenDate(userProfile);
     if (!seenDate) return 'offline';
-    return `visto ${seenDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+    const now = new Date();
+    const isToday = seenDate.toDateString() === now.toDateString();
+    
+    const yesterday = new Date();
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday = seenDate.toDateString() === yesterday.toDateString();
+
+    const timeStr = seenDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    if (isToday) return `visto hoje às ${timeStr}`;
+    if (isYesterday) return `visto ontem às ${timeStr}`;
+    
+    const dateStr = seenDate.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+    return `visto em ${dateStr} às ${timeStr}`;
   };
 
   const subtleTextClass = theme === 'dark' ? 'text-white/70' : 'text-brand-blue-text/60';
