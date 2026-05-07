@@ -38,7 +38,16 @@ export async function POST(request: Request) {
       );
     }
 
-    const data = await response.json() as any;
+    interface ADResponse {
+      user?: {
+        username?: string;
+        user?: string;
+        [key: string]: unknown;
+      };
+      [key: string]: unknown;
+    }
+
+    const data = (await response.json()) as ADResponse;
     console.log('Login Success for:', user);
 
     // Extrair dados do usuário da resposta da API AD
