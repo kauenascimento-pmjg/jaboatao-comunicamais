@@ -77,9 +77,9 @@ export async function POST(request: Request) {
 
       return NextResponse.json({ success: true, user: apiUser, uid });
 
-    } catch (fetchError: any) {
+    } catch (fetchError: unknown) {
       clearTimeout(timeoutId);
-      if (fetchError.name === 'AbortError') {
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
         console.error(`[${requestId}] Fetch Timeout after 10s`);
         return NextResponse.json(
           { error: 'Timeout na conexão com o AD', details: 'O servidor AD demorou muito para responder ou está inacessível.' },
@@ -89,7 +89,7 @@ export async function POST(request: Request) {
       throw fetchError;
     }
 
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error(`[${requestId}] Next.js AD Auth Exception:`, error);
     return NextResponse.json(
       { 
