@@ -60,8 +60,8 @@ export default function LoginPage() {
     setError(null);
 
     try {
-      // 1. Validar via AD (Proxy Next.js API)
-      const response = await fetch(`/api/auth/ad`, {
+      // 1. Validar via AD (Backend)
+      const response = await fetch(`${getBackendBaseUrl()}/api/auth/ad`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user: username.trim(), password }),
