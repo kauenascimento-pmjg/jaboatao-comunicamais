@@ -1,10 +1,6 @@
-# Firebase App Hosting Configuration
-# Documentation: https://firebase.google.com/docs/app-hosting/configure
-
 kind: "AppHostingYaml"
 schemaVersion: "v1"
 
-# Caminho para a pasta do frontend
 rootDirectory: "frontend"
 
 runConfig:
@@ -12,7 +8,6 @@ runConfig:
   maxInstances: 10
   concurrency: 80
 
-# Variáveis de Ambiente Necessárias para o Build do Next.js
 env:
   - variable: NEXT_PUBLIC_FIREBASE_API_KEY
     value: "AIzaSyBL65DOZSXJ2mTuQffzZGqxtjuP2PwxvRg"
@@ -31,6 +26,6 @@ env:
   - variable: NEXT_PUBLIC_FIREBASE_DATABASE_ID
     value: "comunica-mais-jaboatao"
   - variable: NEXT_PUBLIC_BACKEND_URL
-    value: "https://comunica-mais-jaboatao--pmjg-apps-hmol.us-central1.hosted.app" # Mudar para a URL de produção quando disponível
+    value: "https://comunica-mais-jaboatao--pmjg-apps-hmol.us-central1.hosted.app"
   - variable: PYTHON_AUTH_API
     value: "http://10.224.0.65:80/auth/basic"
