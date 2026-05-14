@@ -1,17 +1,25 @@
 'use client';
 
-import React, { useState } from 'react';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import React, { useState, useEffect } from 'react';
+import { 
+  isSignInWithEmailLink, 
+  sendSignInLinkToEmail, 
+  signInWithEmailLink,
+  updatePassword,
+  signOut
+} from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useRouter } from 'next/navigation';
 import { useAuthStore, ADUser } from '@/lib/authStore';
-import { Eye, EyeOff, AlertCircle, Moon, Sun } from 'lucide-react';
+import { AlertCircle, Moon, Sun, Mail, CheckCircle2, ArrowRight, Loader2, Lock, Eye, EyeOff, ShieldCheck, Check, X } from 'lucide-react';
 import { useTheme } from '@/components/providers/ThemeProvider';
 import { syncUserToFirestore } from '@/lib/chatService';
 
 export default function LoginPage() {
-  const [username, setUsername] = useState('');
+  const [step, setStep]         = useState<'email' | 'verification' | 'password-setup'>('email');
+  const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPw, setShowPw]     = useState(false);
   const [error, setError]       = useState<string | null>(null);
   const [loading, setLoading]   = useState(false);
@@ -19,85 +27,102 @@ export default function LoginPage() {
   const { setUser }             = useAuthStore();
   const router = useRouter();
 
-  const getBackendBaseUrl = () => {
-    const configuredUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-    if (configuredUrl && !/localhost|127\.0\.0\.1/i.test(configuredUrl)) return configuredUrl;
-    if (typeof window !== 'undefined') return `${window.location.protocol}//${window.location.hostname}:4000`;
-    return configuredUrl || 'http://localhost:4000';
-  };
+  // Requisitos da Senha
+  const requirements = [
+    { label: 'Mínimo 8 caracteres', test: (pw: string) => pw.length >= 8 },
+    { label: 'Letra Maiúscula', test: (pw: string) => /[A-Z]/.test(pw) },
+    { label: 'Letra Minúscula', test: (pw: string) => /[a-z]/.test(pw) },
+    { label: 'Número', test: (pw: string) => /[0-9]/.test(pw) },
+    { label: 'Caractere Especial (!@#$...)', test: (pw: string) => /[!@#$%^&*(),.?":{}|<>]/.test(pw) },
+  ];
 
-  /** Login técnico no Firebase para não interferir com e-mails reais */
-  const bridgeAuth = async (adUsername: string, adPassword: string, displayName: string) => {
-    // Usamos um domínio interno falso para garantir zero interferência
-    const techEmail = `${adUsername}.ad@comunicamais.internal`;
-    const techPassword = `bridge_${adUsername}_pmjg_2025`;
+  const allMet = requirements.every(r => r.test(password));
 
-    try {
-      return await signInWithEmailAndPassword(auth, techEmail, techPassword);
-    } catch (err) {
-      const error = err as { code?: string };
-      if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential' || error.code === 'auth/wrong-password') {
-        try {
-          const cred = await createUserWithEmailAndPassword(auth, techEmail, techPassword);
-          await updateProfile(cred.user, { displayName });
-          return cred;
-        } catch (createErr) {
-          const createError = createErr as { code?: string };
-          // Se ainda der erro de e-mail em uso (raro com domínio interno), tentamos logar com a senha digitada
-          if (createError.code === 'auth/email-already-in-use') {
-             return await signInWithEmailAndPassword(auth, techEmail, techPassword);
+  // 1. Detectar retorno do Link Mágico
+  useEffect(() => {
+    const handleEmailLink = async () => {
+      if (isSignInWithEmailLink(auth, window.location.href)) {
+        setLoading(true);
+        let emailForSignIn = window.localStorage.getItem('emailForSignIn');
+        
+        if (!emailForSignIn) {
+          emailForSignIn = window.prompt('Confirme seu e-mail para continuar:');
+        }
+
+        if (emailForSignIn) {
+          try {
+            await signInWithEmailLink(auth, emailForSignIn, window.location.href);
+            setEmail(emailForSignIn);
+            setStep('password-setup'); // Após confirmar o e-mail, vai para a senha
+          } catch (err) {
+            console.error(err);
+            setError('O link expirou ou é inválido.');
+          } finally {
+            setLoading(false);
           }
-          throw createErr;
         }
       }
-      throw err;
-    }
-  };
+    };
+    handleEmailLink();
+  }, []);
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleSendLink = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
 
+    if (!email.toLowerCase().endsWith('@jaboatao.pe.gov.br')) {
+      setError('Utilize seu e-mail institucional.');
+      setLoading(false);
+      return;
+    }
+
     try {
-      // 1. Validar via AD (Backend)
-      const response = await fetch(`${getBackendBaseUrl()}/api/auth/ad`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user: username.trim(), password }),
-      });
-
-      if (!response.ok) {
-        setError('Usuário ou senha incorretos.');
-        return;
-      }
-
-      const userData = await response.json();
-      const apiUser = userData.user || {};
-      const adUsername = userData.uid || apiUser.username || username;
-      const displayName = apiUser.full_name || apiUser.nome_completo || apiUser.nome || adUsername;
-
-      // 2. Ponte Firebase (Silenciosa e sem e-mail real)
-      const cred = await bridgeAuth(adUsername, password, displayName);
-      
-      // 3. Sucesso! Salvar e Redirecionar
-      const adUser: ADUser = {
-        uid: cred.user.uid,
-        displayName,
-        email: apiUser.email || `${adUsername}@jaboatao.pe.gov.br`,
-        nome_completo: displayName,
-        user: adUsername,
-        isAD: true,
-        department: apiUser.department || 'Geral',
+      const actionCodeSettings = {
+        url: window.location.origin + '/login',
+        handleCodeInApp: true,
       };
-
-      await syncUserToFirestore(adUser);
-      setUser(adUser);
-      router.push('/chat');
-
+      await sendSignInLinkToEmail(auth, email, actionCodeSettings);
+      window.localStorage.setItem('emailForSignIn', email);
+      setStep('verification');
     } catch (err) {
-      console.error('Erro no login:', err);
-      setError('Ocorreu um erro ao conectar com o servidor.');
+      setError('Erro ao enviar e-mail. Tente novamente.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFinishSetup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!allMet) return;
+    if (password !== confirmPassword) {
+      setError('As senhas não coincidem.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const user = auth.currentUser;
+      if (user) {
+        await updatePassword(user, password);
+        
+        const displayName = user.displayName || email.split('@')[0];
+        const adUser: ADUser = {
+          uid: user.uid,
+          displayName,
+          email: user.email!,
+          nome_completo: displayName,
+          user: email.split('@')[0],
+          isAD: false,
+          department: 'Geral',
+        };
+
+        await syncUserToFirestore(adUser);
+        setUser(adUser);
+        router.push('/chat');
+      }
+    } catch (err) {
+      setError('Erro ao definir senha. Tente novamente.');
     } finally {
       setLoading(false);
     }
@@ -120,65 +145,97 @@ export default function LoginPage() {
           <h1 className="font-display font-extrabold text-3xl text-brand-blue-text tracking-tighter uppercase">
             COMUNICA<span className="text-brand-gold">+</span>
           </h1>
-          <p className="text-[10px] font-bold text-brand-green uppercase tracking-[0.3em] mt-1">
-            Prefeitura do Jaboatão dos Guararapes
-          </p>
+          <p className="text-[10px] font-bold text-brand-green uppercase tracking-[0.3em] mt-1">Prefeitura do Jaboatão dos Guararapes</p>
         </div>
 
         <div className="bg-[var(--surface)] border-4 border-brand-blue p-8 shadow-brutal-xl shadow-brand-blue relative">
-          <div className="absolute top-0 right-0 py-1 px-3 bg-brand-blue text-white font-display font-bold text-[10px] uppercase tracking-widest">
-            Acesso AD
-          </div>
-
-          <form onSubmit={handleLogin} className="space-y-6">
-            <div className="space-y-2">
-              <label className="block font-display font-bold text-xs uppercase tracking-widest text-brand-blue-text/60">
-                Usuário Institucional
-              </label>
-              <input
-                type="text"
-                required
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                className="w-full bg-[var(--bg)] border-2 border-brand-blue/20 p-4 font-sans text-sm focus:border-brand-blue outline-none transition-all placeholder:opacity-30"
-                placeholder="nome.sobrenome"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="block font-display font-bold text-xs uppercase tracking-widest text-brand-blue-text/60">
-                Senha do Computador
-              </label>
-              <div className="relative">
-                <input
-                  type={showPw ? 'text' : 'password'}
-                  required
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  className="w-full bg-[var(--bg)] border-2 border-brand-blue/20 p-4 font-sans text-sm focus:border-brand-blue outline-none transition-all placeholder:opacity-30"
-                  placeholder="••••••••"
-                />
-                <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-4 top-1/2 -translate-y-1/2 text-brand-blue/40 hover:text-brand-blue">
-                  {showPw ? <EyeOff size={18} /> : <Eye size={18} />}
-                </button>
+          
+          {step === 'email' && (
+            <form onSubmit={handleSendLink} className="space-y-6 animate-fade-in">
+              <div className="absolute top-0 right-0 py-1 px-3 bg-brand-blue text-white font-display font-bold text-[10px] uppercase tracking-widest">Acesso</div>
+              <div className="space-y-2">
+                <label className="block font-display font-bold text-xs uppercase tracking-widest text-brand-blue-text/60">E-mail Institucional</label>
+                <div className="relative">
+                  <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-blue/30" size={18} />
+                  <input
+                    type="email" required value={email} onChange={e => setEmail(e.target.value)}
+                    className="w-full bg-[var(--bg)] border-2 border-brand-blue/20 p-4 pl-12 font-sans text-sm focus:border-brand-blue outline-none transition-all"
+                    placeholder="seu e-mail"
+                  />
+                </div>
               </div>
+              {error && <div className="bg-brand-red/5 border-l-4 border-brand-red p-4 text-brand-red text-xs font-semibold flex gap-2"><AlertCircle size={14}/>{error}</div>}
+              <button type="submit" disabled={loading} className="w-full bg-brand-blue text-white py-5 font-display font-bold text-sm uppercase tracking-widest shadow-brutal-md shadow-brand-gold hover:shadow-none transition-all flex items-center justify-center gap-2">
+                {loading ? <Loader2 size={18} className="animate-spin" /> : <>Receber Link <ArrowRight size={18}/></>}
+              </button>
+            </form>
+          )}
+
+          {step === 'verification' && (
+            <div className="text-center py-4 animate-fade-in">
+              <div className="w-16 h-16 bg-brand-green/10 text-brand-green rounded-full flex items-center justify-center mx-auto mb-6"><Mail size={32} /></div>
+              <h2 className="font-display font-extrabold text-xl text-brand-blue-text mb-2">Verifique seu E-mail</h2>
+              <p className="text-sm text-brand-blue-text/60 mb-8">Enviamos um link para <strong>{email}</strong>. Clique nele para confirmar sua identidade e definir sua senha.</p>
+              <button onClick={() => setStep('email')} className="text-xs font-bold text-brand-blue underline">Usar outro e-mail</button>
             </div>
+          )}
 
-            {error && (
-              <div className="flex items-center gap-3 bg-brand-red/5 border-l-4 border-brand-red p-4 text-brand-red">
-                <AlertCircle size={18} />
-                <p className="font-sans text-xs font-semibold">{error}</p>
+          {step === 'password-setup' && (
+            <form onSubmit={handleFinishSetup} className="space-y-6 animate-fade-in">
+              <div className="absolute top-0 right-0 py-1 px-3 bg-brand-gold text-brand-blue-text font-display font-bold text-[10px] uppercase tracking-widest">Nova Senha</div>
+              
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <label className="block font-display font-bold text-xs uppercase tracking-widest text-brand-blue-text/60">Definir Senha</label>
+                  <div className="relative">
+                    <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-blue/30" size={18} />
+                    <input
+                      type={showPw ? 'text' : 'password'} required value={password} onChange={e => setPassword(e.target.value)}
+                      className="w-full bg-[var(--bg)] border-2 border-brand-blue/20 p-4 pl-12 font-sans text-sm focus:border-brand-blue outline-none transition-all"
+                      placeholder="SUA SENHA"
+                    />
+                    <button type="button" onClick={() => setShowPw(!showPw)} className="absolute right-4 top-1/2 -translate-y-1/2 text-brand-blue/40">{showPw ? <EyeOff size={18}/> : <Eye size={18}/>}</button>
+                  </div>
+                </div>
+
+                {/* Checklist de Requisitos */}
+                <div className="bg-[var(--bg)] border-2 border-brand-blue/10 p-4 space-y-2">
+                  <p className="text-[10px] font-bold text-brand-blue-text/40 uppercase tracking-widest mb-2">Etapas da Senha:</p>
+                  {requirements.map((req, i) => {
+                    const met = req.test(password);
+                    return (
+                      <div key={i} className={`flex items-center gap-2 text-[11px] font-semibold transition-colors ${met ? 'text-brand-green' : 'text-brand-blue-text/30'}`}>
+                        {met ? <Check size={14} /> : <X size={14} />}
+                        {req.label}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-2">
+                  <label className="block font-display font-bold text-xs uppercase tracking-widest text-brand-blue-text/60">Confirmar Senha</label>
+                  <div className="relative">
+                    <input
+                      type={showPw ? 'text' : 'password'} required value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+                      className="w-full bg-[var(--bg)] border-2 border-brand-blue/20 p-4 font-sans text-sm focus:border-brand-blue outline-none transition-all"
+                      placeholder="REPETIR SENHA"
+                    />
+                  </div>
+                </div>
               </div>
-            )}
 
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full bg-brand-blue text-white py-5 font-display font-bold text-sm uppercase tracking-widest shadow-brutal-md shadow-brand-gold hover:shadow-none hover:translate-x-1 hover:translate-y-1 disabled:opacity-50 transition-all"
-            >
-              {loading ? 'Verificando...' : 'Entrar no Chat'}
-            </button>
-          </form>
+              {error && <div className="bg-brand-red/5 border-l-4 border-brand-red p-4 text-brand-red text-xs font-semibold flex gap-2"><AlertCircle size={14}/>{error}</div>}
+              
+              <button 
+                type="submit" 
+                disabled={loading || !allMet} 
+                className="w-full bg-brand-blue text-white py-5 font-display font-bold text-sm uppercase tracking-widest shadow-brutal-md shadow-brand-gold hover:shadow-none disabled:opacity-30 transition-all"
+              >
+                {loading ? <Loader2 size={18} className="animate-spin mx-auto" /> : 'Finalizar e Entrar'}
+              </button>
+            </form>
+          )}
+
         </div>
       </div>
     </main>
