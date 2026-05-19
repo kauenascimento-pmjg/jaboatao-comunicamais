@@ -1,39 +1,62 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { User } from 'firebase/auth';
 
-export interface ADUser {
+/**
+ * Usuário de autenticação simplificado (apenas Firebase Auth)
+ * Sem dados de Firestore
+ */
+export interface AuthUser {
   uid: string;
-  displayName: string;
   email: string;
-  nome_completo: string;
-  email_institucional?: string;
-  user: string;
-  isAD: boolean;
-  department?: string;
-  role?: string;
+  displayName: string;
+  emailVerified: boolean;
+  createdAt: Date | null;
 }
 
 interface AuthState {
-  user: User | ADUser | null;
+  user: AuthUser | null;
   loading: boolean;
-  setUser: (user: User | ADUser | null) => void;
+  setUser: (user: AuthUser | null) => void;
   setLoading: (loading: boolean) => void;
+  logout: () => void;
 }
 
+/**
+ * Zustand Auth Store com persistência local
+ * Dados são salvos no localStorage para recuperar entre abas
+ */
 export const useAuthStore = create<AuthState>()(
   persist(
     (set) => ({
       user: null,
       loading: true,
-      setUser: (user) => set({ user }),
+      
+      setUser: (user) => {
+        console.log('[AuthStore] Setting user:', user?.uid || 'null');
+        set({ user });
+      },
+      
       setLoading: (loading) => set({ loading }),
+      
+      logout: () => {
+        console.log('[AuthStore] Clearing user state');
+        set({ user: null });
+      },
     }),
     {
-      name: 'comunica-plus-auth', // Nome da chave no localStorage
-      // Como o objeto User do Firebase tem métodos circulares, 
-      // o persist vai salvar apenas os dados básicos para o ADUser
-      // Para o Firebase User, o onAuthStateChanged no AuthProvider cuidará da restauração real.
+      name: 'comunica-plus-auth-v2',
+      partialize: (state) => {
+        // Salvar apenas dados não sensíveis no localStorage
+        return {
+          user: state.user ? {
+            uid: state.user.uid,
+            email: state.user.email,
+            displayName: state.user.displayName,
+            emailVerified: state.user.emailVerified,
+            createdAt: state.user.createdAt ? state.user.createdAt.toISOString() : null,
+          } : null,
+        };
+      },
     }
   )
 );

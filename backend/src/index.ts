@@ -8,6 +8,7 @@ import { initFirebase } from './services/firebase';
 import { createOfficialChannel, listChannels } from './controllers/channels';
 import { createUser, listFirestoreUsers, syncUserToFirestore } from './controllers/users';
 import { seedDatabase, listUsers, syncUserProfile } from './controllers/admin';
+import { authenticateWithAD } from './controllers/auth';
 
 const app = express();
 const port = process.env.PORT || 4000;
@@ -40,56 +41,8 @@ app.get('/api/users', listFirestoreUsers);
 // Admin — Database Seed (somente primeira vez)
 app.post('/api/admin/seed', seedDatabase);
 
-// Proxy Autenticação AD
-app.post('/api/auth/ad', async (req, res) => {
-  try {
-    const { user, password } = req.body;
-    const apiUrl = process.env.PYTHON_AUTH_API;
-
-    console.log('--- AD Proxy Attempt (Backend) ---');
-    console.log('User:', user);
-
-    if (!apiUrl) {
-      return res.status(500).json({ error: 'Python Auth API URL not configured in Backend' });
-    }
-
-    const basicAuth = Buffer.from(`${user}:${password}`).toString('base64');
-
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Basic ${basicAuth}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ 
-        user, 
-        usuario: user,
-        username: user,
-        senha: password, 
-        password: password 
-      }),
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Python API Error:', errorText);
-      return res.status(response.status).json({ error: 'Falha na autenticação AD', details: errorText });
-    }
-
-    const data = await response.json() as any;
-    console.log('Login Success for:', user);
-
-    // Extrair dados do usuário da resposta da API AD
-    const apiUser = data.user || {};
-    const uid = apiUser.username || apiUser.user || user;
-
-    // Retorna dados do usuário — Frontend gerenciará a sessão Firebase
-    res.json({ success: true, user: apiUser, uid });
-  } catch (error) {
-    console.error('Backend Proxy Auth Error:', error);
-    res.status(500).json({ error: 'Internal Server Error during AD auth proxy' });
-  }
-});
+// Proxy Autenticação AD + Firebase Custom Token
+app.post('/api/auth/ad', authenticateWithAD);
 
 app.listen(port, () => {
   console.log(`🚀 Server running on http://localhost:${port}`);

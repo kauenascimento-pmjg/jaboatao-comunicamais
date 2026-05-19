@@ -2,7 +2,6 @@ import { db, storage } from './firebase';
 import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs, updateDoc, arrayUnion, deleteField, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot, StorageError } from 'firebase/storage';
 import { User } from 'firebase/auth';
-import { ADUser } from './authStore';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -43,14 +42,15 @@ export type UserProfile = {
   uid: string;
   email: string;
   displayName: string;
+  nome?: string;
   department?: string;
   role?: string;
   isOnline?: boolean;
   lastSeen?: { toDate: () => Date } | null;
   photoURL?: string;
-  adUsername?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
+  lastLoginAt?: unknown;
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
@@ -102,34 +102,10 @@ export async function uploadFile(file: File, folder: string = 'chat_files'): Pro
 
 // ─── USER PROFILE ─────────────────────────────────────────────────────────────
 
-/** Salva/atualiza o perfil do usuário no Firestore ao logar */
-export async function syncUserToFirestore(user: User | ADUser): Promise<void> {
-  try {
-    const isAD = 'isAD' in user;
-    const uid = user.uid; // Firebase UID
-    const email = user.email || '';
-    const displayName = user.displayName || '';
-    const adUsername = isAD ? (user as ADUser).user : (email.split('@')[0]);
-
-    if (!uid) return;
-
-    const ref = doc(db, 'users', uid);
-    await setDoc(ref, {
-      uid,
-      adUsername,
-      email,
-      displayName,
-      department: (user as ADUser).department || 'Geral',
-      role: (user as ADUser).role || 'Servidor',
-      updatedAt: serverTimestamp(),
-    }, { merge: true });
-    
-  } catch (error) {
-    console.error('Error in syncUserToFirestore:', error);
-  }
-}
-
-/** Busca todos os usuários do Firestore (diretório de servidores) */
+/**
+ * Busca todos os usuários do Firestore (diretório de servidores)
+ * Nota: Sem depender de sincronização de autenticação
+ */
 export async function getAllUsers(): Promise<UserProfile[]> {
   try {
     const snapshot = await getDocs(collection(db, 'users'));

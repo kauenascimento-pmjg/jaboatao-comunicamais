@@ -1,42 +1,46 @@
 'use client';
 
 import { useEffect } from 'react';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import { useAuthStore } from '@/lib/authStore';
-import { syncUserToFirestore } from '@/lib/chatService';
 
+/**
+ * AuthProvider simplificado
+ * Monitora estado do Firebase Auth e atualiza o Zustand store
+ * Sem dependência de Firestore
+ */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const { setUser, setLoading } = useAuthStore();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        setUser(user);
-        await syncUserToFirestore(user).catch(console.error);
-      } else {
-        // Obter estado atual para verificar se temos um usuário AD persistido
-        const currentState = useAuthStore.getState().user;
-        const isAD = currentState && 'isAD' in currentState;
+    console.log('[AuthProvider] Setting up Firebase Auth listener');
+
+    const unsubscribe = onAuthStateChanged(auth, (firebaseUser: User | null) => {
+      if (firebaseUser) {
+        console.log('[AuthProvider] User authenticated:', firebaseUser.uid, firebaseUser.email);
         
-        if (!isAD) {
-          setUser(null);
-        }
+        // Armazenar dados básicos do Firebase Auth no store
+        setUser({
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || '',
+          displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || '',
+          emailVerified: firebaseUser.emailVerified,
+          createdAt: firebaseUser.metadata.creationTime ? new Date(firebaseUser.metadata.creationTime) : null,
+        });
+      } else {
+        console.log('[AuthProvider] User logged out');
+        setUser(null);
       }
+      
       setLoading(false);
     });
 
-    return () => unsubscribe();
+    return () => {
+      console.log('[AuthProvider] Cleaning up Firebase Auth listener');
+      unsubscribe();
+    };
   }, [setUser, setLoading]);
-
-  // Efeito adicional para sincronizar usuários AD quando o store mudar
-  const userAccount = useAuthStore(state => state.user);
-  
-  useEffect(() => {
-    if (userAccount && 'isAD' in userAccount) {
-      syncUserToFirestore(userAccount).catch(console.error);
-    }
-  }, [userAccount]);
 
   return <>{children}</>;
 }
