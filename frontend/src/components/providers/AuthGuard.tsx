@@ -15,7 +15,7 @@ import { useAuth } from '@/hooks/useAuth';
  * ```
  */
 export function AuthGuard({ children }: { children: React.ReactNode }) {
-  const { user, isLoading, isAuthenticated } = useAuth();
+  const { isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
 
   useEffect(() => {

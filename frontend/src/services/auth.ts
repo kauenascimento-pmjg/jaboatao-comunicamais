@@ -57,24 +57,24 @@ export const sendRecoveryLink = async (email: string) => {
 };
 
 /**
- * Verifica se o usuário JÁ TEM uma conta no Firebase Auth
- * Sem depender do Firestore
+ * Verifica se o usuário já tem senha cadastrada no Firebase Auth.
+ * Contas criadas apenas com link de acesso continuam retornando false.
  */
 export const checkUserHasPassword = async (email: string): Promise<boolean> => {
   try {
     console.log('[Auth Service] Checking if user exists:', email);
     const methods = await fetchSignInMethodsForEmail(auth, email);
     
-    if (methods.length > 0) {
-      console.log('[Auth Service] User found with methods:', methods);
+    if (methods.includes('password')) {
+      console.log('[Auth Service] User found with password method:', methods);
       return true;
     }
 
-    console.log('[Auth Service] User not found in Firebase Auth');
+    console.log('[Auth Service] No password method found for user:', methods);
     return false;
   } catch (error) {
     console.error('[Auth Service] Error checking user:', error);
-    // Se houver erro na verificação, assumir que não existe
+    // Em caso de erro, assumir que não existe senha para não bloquear o acesso.
     return false;
   }
 };
@@ -92,8 +92,8 @@ export const createAnonUserForPasswordSetup = async (email: string): Promise<Use
     const userCredential = await createUserWithEmailAndPassword(auth, email, tempPassword);
     console.log('[Auth Service] Temp user created:', userCredential.user.uid);
     return userCredential.user;
-  } catch (error: any) {
-    if (error.code === 'auth/email-already-in-use') {
+  } catch (error: unknown) {
+    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === 'auth/email-already-in-use') {
       console.log('[Auth Service] User already exists');
       throw new Error('Este e-mail já está cadastrado no sistema.');
     }

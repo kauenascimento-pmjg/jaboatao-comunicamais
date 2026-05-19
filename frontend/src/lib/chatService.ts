@@ -1,7 +1,6 @@
 import { db, storage } from './firebase';
 import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs, updateDoc, arrayUnion, deleteField, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot, StorageError } from 'firebase/storage';
-import { User } from 'firebase/auth';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 

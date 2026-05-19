@@ -2,8 +2,10 @@
 
 import React, { useState, useEffect, Suspense } from 'react';
 import { 
-  isSignInWithEmailLink,
-  signInWithEmailLink,
+  applyActionCode,
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
+  signOut,
   signInWithEmailAndPassword,
   verifyPasswordResetCode,
   confirmPasswordReset,
@@ -13,18 +15,19 @@ import { auth } from '@/lib/firebase';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertCircle, Moon, Sun, Mail, ArrowRight, Loader2, Lock, Eye, EyeOff, Check, X } from 'lucide-react';
 import { useTheme } from '@/components/providers/ThemeProvider';
-import { checkUserHasPassword, sendRecoveryLink, sendFirstAccessLink } from '@/services/auth';
+import { sendRecoveryLink } from '@/services/auth';
 
-type Step = 'email' | 'login' | 'verification' | 'forgot-password' | 'recovery-sent' | 'reset-password';
+type Step = 'email' | 'login' | 'register' | 'verification' | 'forgot-password' | 'recovery-sent' | 'reset-password';
 
 /**
  * Página de Login Simplificada
  * Usa APENAS Firebase Authentication (sem Firestore)
  * 
  * Fluxo:
- * 1. Primeiro acesso: email → link mágico → login direto
- * 2. Login: email + senha → signInWithEmailAndPassword
- * 3. Recuperação: email → link → redefine senha
+ * 1. Cadastro com e-mail + senha
+ * 2. Confirmação via link enviado por e-mail
+ * 3. Login com e-mail + senha após confirmar e-mail
+ * 4. Recuperação de senha
  */
 function LoginContent() {
   const [step, setStep]         = useState<Step>('email');
@@ -33,6 +36,7 @@ function LoginContent() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPw, setShowPw]     = useState(false);
   const [error, setError]       = useState<string | null>(null);
+  const [notice, setNotice]     = useState<string | null>(null);
   const [loading, setLoading]   = useState(false);
   const [oobCode, setOobCode]   = useState<string | null>(null);
   
@@ -55,12 +59,34 @@ function LoginContent() {
   const passwordMeetsRequirements = requirements.every(r => r.test(password));
 
   /**
-   * Processar links de ação (Redefinição de Senha ou Primeiro Acesso)
+   * Processar links de ação (confirmação de e-mail e redefinição de senha)
    */
   useEffect(() => {
     const processActionLinks = async () => {
       const mode = searchParams.get('mode');
       const code = searchParams.get('oobCode');
+
+      if (mode === 'verifyEmail' && code) {
+        console.log('[Auth] Processing email verification link');
+        setLoading(true);
+        setError(null);
+        try {
+          await applyActionCode(auth, code);
+          const pendingEmail = window.localStorage.getItem('pendingVerificationEmail');
+          if (pendingEmail) {
+            setEmail(pendingEmail);
+          }
+          setNotice('✅ E-mail confirmado com sucesso! Faça login com sua senha.');
+          setStep('login');
+        } catch (err) {
+          console.error('[Auth] Invalid verification code:', err);
+          setError('❌ O link de confirmação expirou ou é inválido.');
+          setStep('email');
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
 
       // Fluxo de redefinição de senha
       if (mode === 'resetPassword' && code) {
@@ -79,75 +105,30 @@ function LoginContent() {
         }
         return;
       }
-
-      if (isSignInWithEmailLink(auth, window.location.href)) {
-        console.log('[Auth] Processing first access sign-in link');
-        setLoading(true);
-
-        let emailForSignIn = window.localStorage.getItem('emailForSignIn');
-
-        if (!emailForSignIn) {
-          emailForSignIn = window.prompt('Confirme seu e-mail para continuar:') ?? '';
-        }
-
-        if (!emailForSignIn) {
-          setError('Confirme seu e-mail para concluir o acesso.');
-          setLoading(false);
-          return;
-        }
-
-        try {
-          await signInWithEmailLink(auth, emailForSignIn, window.location.href);
-          window.localStorage.removeItem('emailForSignIn');
-          router.push('/chat');
-        } catch (err) {
-          console.error('[Auth] Magic link error:', err);
-          setError('O link expirou ou é inválido. Solicite um novo acesso.');
-        } finally {
-          setLoading(false);
-        }
-      }
     };
 
     processActionLinks();
   }, [searchParams]);
 
   /**
-   * Verificar e-mail institucional e validar se usuário existe
+   * Verificar e-mail institucional e seguir para login
    */
   const handleEmailCheck = async (e: React.FormEvent) => {
     e.preventDefault();
-    setLoading(true);
     setError(null);
+    setNotice(null);
 
     const targetEmail = email.trim().toLowerCase();
     
     // Validar domínio institucional
     if (!targetEmail.endsWith('@jaboatao.pe.gov.br')) {
       setError('⚠️ Utilize seu e-mail institucional (@jaboatao.pe.gov.br).');
-      setLoading(false);
       return;
     }
 
-    try {
-      const userExists = await checkUserHasPassword(targetEmail);
-
-      if (userExists) {
-        setStep('login');
-        setPassword('');
-        setConfirmPassword('');
-      } else {
-        console.log('[Auth] No account found, sending first access link');
-        const actionUrl = window.location.origin + '/login';
-        await sendFirstAccessLink(targetEmail, actionUrl);
-        setStep('verification');
-      }
-    } catch (err) {
-      console.error('[Auth] Error checking user:', err);
-      setError('❌ Erro ao verificar e-mail. Tente novamente.');
-    } finally {
-      setLoading(false);
-    }
+    setStep('login');
+    setPassword('');
+    setConfirmPassword('');
   };
 
   /**
@@ -157,16 +138,28 @@ function LoginContent() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setNotice(null);
 
     const targetEmail = email.trim().toLowerCase();
 
     try {
       console.log('[Auth] Attempting login for:', targetEmail);
       const userCredential = await signInWithEmailAndPassword(auth, targetEmail, password);
+
+      if (!userCredential.user.emailVerified) {
+        const actionUrl = window.location.origin + '/login';
+        await sendEmailVerification(userCredential.user, {
+          url: actionUrl,
+          handleCodeInApp: true,
+        });
+        window.localStorage.setItem('pendingVerificationEmail', targetEmail);
+        await signOut(auth);
+        setStep('verification');
+        setError('❌ E-mail ainda não confirmado. Enviamos um novo link de confirmação.');
+        return;
+      }
       
       console.log('[Auth] Login successful:', userCredential.user.uid);
-      // O AuthProvider já cuida de atualizar o store automaticamente
-      // Apenas redirecionar
       router.push('/chat');
     } catch (err) {
       const authError = err as AuthError;
@@ -185,12 +178,71 @@ function LoginContent() {
   };
 
   /**
+   * Cadastro com e-mail + senha e envio de confirmação
+   */
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!passwordMeetsRequirements) {
+      setError('❌ A senha não atende a todos os requisitos.');
+      return;
+    }
+
+    if (password !== confirmPassword) {
+      setError('❌ As senhas não coincidem.');
+      return;
+    }
+
+    const targetEmail = email.trim().toLowerCase();
+
+    setLoading(true);
+    setError(null);
+    setNotice(null);
+
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, targetEmail, password);
+      const actionUrl = window.location.origin + '/login';
+
+      await sendEmailVerification(userCredential.user, {
+        url: actionUrl,
+        handleCodeInApp: true,
+      });
+
+      window.localStorage.setItem('pendingVerificationEmail', targetEmail);
+      await signOut(auth);
+
+      setPassword('');
+      setConfirmPassword('');
+      setStep('verification');
+      setNotice('✅ Cadastro realizado! Enviamos o link de confirmação para seu e-mail.');
+    } catch (err) {
+      const authError = err as AuthError;
+
+      if (authError.code === 'auth/email-already-in-use') {
+        setError(null);
+        setNotice('✅ Este e-mail já está cadastrado. Digite sua senha para entrar.');
+        setPassword('');
+        setConfirmPassword('');
+        setStep('login');
+      } else if (authError.code === 'auth/weak-password') {
+        setError('❌ A senha é muito fraca. Use uma combinação mais segura.');
+      } else {
+        setError('❌ Erro ao criar conta. Tente novamente.');
+      }
+      console.error('[Auth] Register error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /**
    * Solicitar link de recuperação de senha
    */
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setNotice(null);
 
     try {
       console.log('[Auth] Sending password reset link to:', email);
@@ -229,6 +281,7 @@ function LoginContent() {
 
     setLoading(true);
     setError(null);
+    setNotice(null);
 
     try {
       if (step === 'reset-password' && oobCode) {
@@ -333,6 +386,12 @@ function LoginContent() {
         </div>
       )}
 
+      {notice && (
+        <div className="bg-brand-green/5 border-l-4 border-brand-green p-4 text-brand-green text-xs font-semibold">
+          <span>{notice}</span>
+        </div>
+      )}
+
       <button 
         type="submit" 
         disabled={loading || !passwordMeetsRequirements} 
@@ -399,6 +458,12 @@ function LoginContent() {
                 </div>
               )}
 
+              {notice && (
+                <div className="bg-brand-green/5 border-l-4 border-brand-green p-4 text-brand-green text-xs font-semibold">
+                  <span>{notice}</span>
+                </div>
+              )}
+
               <button 
                 type="submit" 
                 disabled={loading} 
@@ -458,6 +523,12 @@ function LoginContent() {
                 </div>
               )}
 
+              {notice && (
+                <div className="bg-brand-green/5 border-l-4 border-brand-green p-4 text-brand-green text-xs font-semibold">
+                  <span>{notice}</span>
+                </div>
+              )}
+
               <button 
                 type="submit" 
                 disabled={loading} 
@@ -468,33 +539,147 @@ function LoginContent() {
 
               <button 
                 type="button" 
-                onClick={() => { setStep('email'); setPassword(''); setError(null); }} 
+                onClick={() => { setStep('email'); setPassword(''); setError(null); setNotice(null); }} 
                 className="w-full text-xs font-bold text-brand-blue/50 uppercase tracking-widest hover:text-brand-blue transition-colors"
               >
                 Usar outro e-mail
               </button>
+
+              <button
+                type="button"
+                onClick={() => { setStep('register'); setError(null); setNotice(null); setConfirmPassword(''); }}
+                className="w-full text-xs font-bold text-brand-blue uppercase tracking-widest hover:underline"
+              >
+                Não tem cadastro? Criar conta
+              </button>
             </form>
           )}
 
-          {/* PASSO 3: Verificação (Link Enviado) */}
+          {/* PASSO 3: Cadastro */}
+          {step === 'register' && (
+            <form onSubmit={handleRegister} className="space-y-6 animate-fade-in">
+              <div className="absolute top-0 right-0 py-1 px-3 bg-brand-gold text-brand-blue-text font-display font-bold text-[10px] uppercase tracking-widest">Criar Conta</div>
+
+              <div className="space-y-2 text-center mb-4">
+                <p className="text-xs font-bold text-brand-blue-text/40 uppercase tracking-widest">Cadastro para:</p>
+                <p className="text-sm font-bold text-brand-blue-text">{email}</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block font-display font-bold text-xs uppercase tracking-widest text-brand-blue-text/60">Crie sua Senha</label>
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-blue/30" size={18} />
+                  <input
+                    type={showPw ? 'text' : 'password'}
+                    required
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    className="w-full bg-[var(--bg)] border-2 border-brand-blue/20 p-4 pl-12 font-sans text-sm focus:border-brand-blue outline-none transition-all"
+                    placeholder="SUA SENHA"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPw(!showPw)}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 text-brand-blue/40 hover:text-brand-blue"
+                  >
+                    {showPw ? <EyeOff size={18}/> : <Eye size={18}/>}
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-[var(--bg)] border-2 border-brand-blue/10 p-4 space-y-2">
+                <p className="text-[10px] font-bold text-brand-blue-text/40 uppercase tracking-widest mb-2">Requisitos da Senha:</p>
+                {requirements.map((req, i) => {
+                  const met = req.test(password);
+                  return (
+                    <div key={i} className={`flex items-center gap-2 text-[11px] font-semibold transition-colors ${met ? 'text-brand-green' : 'text-brand-blue-text/30'}`}>
+                      {met ? <Check size={14} /> : <X size={14} />} {req.label}
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="space-y-2">
+                <label className="block font-display font-bold text-xs uppercase tracking-widest text-brand-blue-text/60">Confirmar Senha</label>
+                <div className="relative">
+                  <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-blue/30" size={18} />
+                  <input
+                    type={showPw ? 'text' : 'password'}
+                    required
+                    value={confirmPassword}
+                    onChange={e => setConfirmPassword(e.target.value)}
+                    className="w-full bg-[var(--bg)] border-2 border-brand-blue/20 p-4 pl-12 font-sans text-sm focus:border-brand-blue outline-none transition-all"
+                    placeholder="REPETIR SENHA"
+                  />
+                </div>
+              </div>
+
+              {error && (
+                <div className="bg-brand-red/5 border-l-4 border-brand-red p-4 text-brand-red text-xs font-semibold flex gap-2">
+                  <AlertCircle size={14} />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {notice && (
+                <div className="bg-brand-green/5 border-l-4 border-brand-green p-4 text-brand-green text-xs font-semibold">
+                  <span>{notice}</span>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={loading || !passwordMeetsRequirements}
+                className="w-full bg-brand-blue text-white py-5 font-display font-bold text-sm uppercase tracking-widest shadow-brutal-md shadow-brand-gold hover:shadow-none disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              >
+                {loading ? <Loader2 size={18} className="animate-spin mx-auto" /> : 'Cadastrar e Enviar Confirmação'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => { setStep('email'); setPassword(''); setConfirmPassword(''); setError(null); setNotice(null); }}
+                className="w-full text-xs font-bold text-brand-blue/50 uppercase tracking-widest hover:text-brand-blue transition-colors"
+              >
+                Voltar
+              </button>
+            </form>
+          )}
+
+          {/* PASSO 4: Verificação (Link Enviado) */}
           {step === 'verification' && (
             <div className="text-center py-4 animate-fade-in">
               <div className="w-16 h-16 bg-brand-gold/10 text-brand-gold rounded-full flex items-center justify-center mx-auto mb-6">
                 <Mail size={32} />
               </div>
-              <h2 className="font-display font-extrabold text-xl text-brand-blue-text mb-2">Primeiro acesso</h2>
+              <h2 className="font-display font-extrabold text-xl text-brand-blue-text mb-2">Confirme seu e-mail</h2>
               <p className="text-sm text-brand-blue-text/60 mb-8">
-                Enviamos um link para <strong>{email}</strong> para entrar direto, sem criar senha agora.
+                Enviamos um link para <strong>{email}</strong>. Você precisa confirmar o e-mail antes de entrar.
               </p>
               <div className="bg-brand-blue/5 p-4 border-l-4 border-brand-blue mb-8">
                 <p className="text-[11px] font-bold text-brand-blue tracking-tight leading-relaxed">
                   ✓ Abra o e-mail recebido<br/>
-                  ✓ Clique no link de acesso<br/>
-                  ✓ Você será redirecionado automaticamente
+                  ✓ Clique no link de confirmação<br/>
+                  ✓ Volte e faça login com e-mail e senha
                 </p>
               </div>
+              {error && (
+                <div className="bg-brand-red/5 border-l-4 border-brand-red p-4 text-brand-red text-xs font-semibold mb-6">
+                  <span>{error}</span>
+                </div>
+              )}
+              {notice && (
+                <div className="bg-brand-green/5 border-l-4 border-brand-green p-4 text-brand-green text-xs font-semibold mb-6">
+                  <span>{notice}</span>
+                </div>
+              )}
               <button 
-                onClick={() => { setStep('email'); setEmail(''); setError(null); }} 
+                onClick={() => { setStep('login'); setError(null); }} 
+                className="w-full bg-brand-blue text-white py-5 font-display font-bold text-sm uppercase tracking-widest shadow-brutal-md shadow-brand-gold hover:shadow-none transition-all mb-3"
+              >
+                Já confirmei, ir para login
+              </button>
+              <button 
+                onClick={() => { setStep('email'); setEmail(''); setPassword(''); setConfirmPassword(''); setError(null); setNotice(null); }} 
                 className="text-xs font-bold text-brand-blue underline uppercase tracking-widest hover:no-underline"
               >
                 Voltar
@@ -502,7 +687,7 @@ function LoginContent() {
             </div>
           )}
 
-          {/* PASSO 4: Esqueci Minha Senha */}
+          {/* PASSO 5: Esqueci Minha Senha */}
           {step === 'forgot-password' && (
             <form onSubmit={handleForgotPassword} className="space-y-6 animate-fade-in">
               <div className="absolute top-0 right-0 py-1 px-3 bg-brand-red text-white font-display font-bold text-[10px] uppercase tracking-widest">Recuperação</div>
@@ -535,6 +720,12 @@ function LoginContent() {
                 </div>
               )}
 
+              {notice && (
+                <div className="bg-brand-green/5 border-l-4 border-brand-green p-4 text-brand-green text-xs font-semibold">
+                  <span>{notice}</span>
+                </div>
+              )}
+
               <button 
                 type="submit" 
                 disabled={loading} 
@@ -545,7 +736,7 @@ function LoginContent() {
 
               <button 
                 type="button" 
-                onClick={() => { setStep('login'); setPassword(''); setError(null); }} 
+                onClick={() => { setStep('login'); setPassword(''); setError(null); setNotice(null); }} 
                 className="w-full text-xs font-bold text-brand-blue/50 uppercase tracking-widest hover:text-brand-blue transition-colors"
               >
                 Voltar ao Login
@@ -553,7 +744,7 @@ function LoginContent() {
             </form>
           )}
 
-          {/* PASSO 5: Link de Recuperação Enviado */}
+          {/* PASSO 6: Link de Recuperação Enviado */}
           {step === 'recovery-sent' && (
             <div className="text-center py-4 animate-fade-in">
               <div className="w-16 h-16 bg-brand-green/10 text-brand-green rounded-full flex items-center justify-center mx-auto mb-6">
@@ -564,7 +755,7 @@ function LoginContent() {
                 Verifique a caixa de entrada do e-mail <strong>{email}</strong> e clique no link para redefinir sua senha.
               </p>
               <button 
-                onClick={() => { setStep('login'); setPassword(''); setError(null); }} 
+                onClick={() => { setStep('login'); setPassword(''); setError(null); setNotice(null); }} 
                 className="w-full bg-brand-blue text-white py-5 font-display font-bold text-sm uppercase tracking-widest shadow-brutal-md shadow-brand-gold hover:shadow-none transition-all"
               >
                 Voltar ao Login
@@ -572,7 +763,7 @@ function LoginContent() {
             </div>
           )}
 
-          {/* PASSO 5: Redefinir Senha */}
+          {/* PASSO 7: Redefinir Senha */}
           {step === 'reset-password' && (
             <PasswordForm 
               title="Nova Senha" 
