@@ -65,6 +65,14 @@ export default function ChatPage() {
   const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
   const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 
+  const updatePresence = useCallback((isOnline: boolean) => {
+    if (!user?.uid) return Promise.resolve();
+    return setUserPresence(user.uid, isOnline, {
+      displayName: user.displayName,
+      email: user.email,
+    }).catch(() => undefined);
+  }, [user?.uid, user?.displayName, user?.email]);
+
   // Load channels and users
   useEffect(() => {
     if (!user) return; // Espera o usuário estar logado
@@ -112,18 +120,18 @@ export default function ChatPage() {
   useEffect(() => {
     if (!user?.uid) return;
 
-    setUserPresence(user.uid, true).catch(() => undefined);
+    updatePresence(true);
 
     const heartbeat = setInterval(() => {
-      setUserPresence(user.uid, true).catch(() => undefined);
+      updatePresence(true);
     }, 30000);
 
     const handleVisibility = () => {
-      setUserPresence(user.uid, !document.hidden).catch(() => undefined);
+      updatePresence(!document.hidden);
     };
 
     const handleBeforeUnload = () => {
-      setUserPresence(user.uid, false).catch(() => undefined);
+      updatePresence(false);
     };
 
     document.addEventListener('visibilitychange', handleVisibility);
@@ -133,9 +141,9 @@ export default function ChatPage() {
       clearInterval(heartbeat);
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      setUserPresence(user.uid, false).catch(() => undefined);
+      updatePresence(false);
     };
-  }, [user?.uid]);
+  }, [updatePresence, user?.uid]);
 
   // Subscribe to messages and typing state for DMs
   useEffect(() => {
@@ -525,7 +533,7 @@ export default function ChatPage() {
 
   const logout = async () => {
     if (user?.uid) {
-      await setUserPresence(user.uid, false).catch(() => undefined);
+      await updatePresence(false);
     }
     await signOut(auth);
     setUser(null);
@@ -533,23 +541,17 @@ export default function ChatPage() {
   };
 
   const initials = (user?.displayName || user?.email || 'U')[0].toUpperCase();
-  const otherUsers = users.filter(u => u.uid !== user?.uid);
-  const filteredUsers = otherUsers.filter(u =>
-    u.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    u.email?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const getLastSeenDate = (userProfile: UserProfile) => {
+  function getLastSeenDate(userProfile: UserProfile) {
     return userProfile.lastSeen?.toDate ? userProfile.lastSeen.toDate() : null;
-  };
+  }
 
-  const isUserActuallyOnline = (userProfile: UserProfile) => {
+  function isUserActuallyOnline(userProfile: UserProfile) {
     const seenDate = getLastSeenDate(userProfile);
     if (!userProfile.isOnline || !seenDate) return false;
     return Date.now() - seenDate.getTime() <= PRESENCE_STALE_MS;
-  };
+  }
 
-  const formatLastSeen = (userProfile: UserProfile) => {
+  function formatLastSeen(userProfile: UserProfile) {
     if (isUserActuallyOnline(userProfile)) return 'online';
     const seenDate = getLastSeenDate(userProfile);
     if (!seenDate) return 'offline';
@@ -568,7 +570,28 @@ export default function ChatPage() {
     
     const dateStr = seenDate.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
     return `visto em ${dateStr} às ${timeStr}`;
-  };
+  }
+
+  const directoryUsers = [...users]
+    .sort((a, b) => {
+      const aOnline = isUserActuallyOnline(a);
+      const bOnline = isUserActuallyOnline(b);
+
+      if (aOnline !== bOnline) return aOnline ? -1 : 1;
+
+      const aSeen = getLastSeenDate(a)?.getTime() ?? 0;
+      const bSeen = getLastSeenDate(b)?.getTime() ?? 0;
+      if (aSeen !== bSeen) return bSeen - aSeen;
+
+      return (a.displayName || a.email || '').localeCompare(b.displayName || b.email || '', 'pt-BR');
+    });
+
+  const filteredUsers = directoryUsers.filter(u =>
+    u.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    u.email?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+  const onlineDirectoryUsers = filteredUsers.filter((userProfile) => isUserActuallyOnline(userProfile));
+  const offlineDirectoryUsers = filteredUsers.filter((userProfile) => !isUserActuallyOnline(userProfile));
 
   const subtleTextClass = theme === 'dark' ? 'text-white/70' : 'text-brand-blue-text/60';
   const checkDefaultClass = theme === 'dark' ? 'text-white/70' : 'text-brand-blue-text/60';
@@ -731,89 +754,149 @@ export default function ChatPage() {
                 className="w-full bg-[var(--surface)] border-2 border-brand-blue/10 pl-9 pr-3 py-2 text-xs font-sans focus:border-brand-blue outline-none transition-all"
               />
             </div>
+            {sidePanel === 'directory' && (
+              <div className="mt-3 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-widest text-brand-blue-text/50 px-1">
+                <span>Usuários que acessaram o sistema</span>
+                <span>{filteredUsers.length} encontrados</span>
+              </div>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto p-2 space-y-1 custom-scroll">
             {sidePanel === 'channels' ? (
-              channels.filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase())).map(channel => (
-                <div
-                  key={channel.id}
-                  className={`w-full flex items-center gap-2 px-2 py-2 transition-all border-l-4 ${
-                    activeView?.type === 'channel' && activeView.id === channel.id
-                      ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
-                      : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
-                  }`}
-                >
-                  <button
-                    onClick={() => { setActiveView({ type: 'channel', id: channel.id, name: channel.name }); setIsMobileMenuOpen(false); }}
-                    className="flex-1 min-w-0 flex items-center gap-3 px-2 py-1 text-left"
+              channels
+                .filter((channel) => channel.name.toLowerCase().includes(searchQuery.toLowerCase()))
+                .map((channel) => (
+                  <div
+                    key={channel.id}
+                    className={`w-full flex items-center gap-2 px-2 py-2 transition-all border-l-4 ${
+                      activeView?.type === 'channel' && activeView.id === channel.id
+                        ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
+                        : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
+                    }`}
                   >
-                    <Hash size={14} className="opacity-60 shrink-0" />
-                    <span className="text-xs font-bold uppercase tracking-wider truncate">{channel.name}</span>
-                  </button>
-
-                  <div className="relative">
                     <button
-                      type="button"
-                      onClick={() => setOpenChannelMenuId((prev) => (prev === channel.id ? null : channel.id))}
-                      className="p-1 rounded-full hover:bg-brand-blue/10"
-                      aria-label="Gerenciar canal"
+                      onClick={() => { setActiveView({ type: 'channel', id: channel.id, name: channel.name }); setIsMobileMenuOpen(false); }}
+                      className="flex-1 min-w-0 flex items-center gap-3 px-2 py-1 text-left"
                     >
-                      <MoreVertical size={14} />
+                      <Hash size={14} className="opacity-60 shrink-0" />
+                      <span className="text-xs font-bold uppercase tracking-wider truncate">{channel.name}</span>
                     </button>
 
-                    {openChannelMenuId === channel.id && (
-                      <div className="absolute right-0 mt-1 w-36 bg-[var(--surface)] border border-brand-blue/20 shadow-brutal-sm shadow-brand-blue/30 z-20">
-                        <button
-                          type="button"
-                          onClick={() => openEditChannelModal(channel)}
-                          className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-blue-text hover:bg-brand-blue/5"
-                        >
-                          <Pencil size={12} /> Editar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => askDeleteChannel(channel)}
-                          className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-red hover:bg-brand-red/5"
-                        >
-                          <Trash2 size={12} /> Excluir
-                        </button>
-                      </div>
-                    )}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={() => setOpenChannelMenuId((prev) => (prev === channel.id ? null : channel.id))}
+                        className="p-1 rounded-full hover:bg-brand-blue/10"
+                        aria-label="Gerenciar canal"
+                      >
+                        <MoreVertical size={14} />
+                      </button>
+
+                      {openChannelMenuId === channel.id && (
+                        <div className="absolute right-0 mt-1 w-36 bg-[var(--surface)] border border-brand-blue/20 shadow-brutal-sm shadow-brand-blue/30 z-20">
+                          <button
+                            type="button"
+                            onClick={() => openEditChannelModal(channel)}
+                            className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-blue-text hover:bg-brand-blue/5"
+                          >
+                            <Pencil size={12} /> Editar
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => askDeleteChannel(channel)}
+                            className="w-full px-3 py-2 flex items-center gap-2 text-xs text-brand-red hover:bg-brand-red/5"
+                          >
+                            <Trash2 size={12} /> Excluir
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))
+                ))
+            ) : filteredUsers.length === 0 ? (
+              <div className="px-3 py-10 text-center text-brand-blue-text/40">
+                <Users size={28} className="mx-auto mb-3 opacity-30" />
+                <p className="text-xs font-bold uppercase tracking-widest">Nenhum usuário encontrado</p>
+                <p className="mt-2 text-[10px] font-medium normal-case tracking-normal">
+                  Os servidores aparecerão aqui assim que acessarem o chat.
+                </p>
+              </div>
             ) : (
-              filteredUsers.map(u => (
-                <button
-                  key={u.uid}
-                  onClick={() => openDm(u)}
-                  className={`w-full flex items-center gap-3 px-3 py-3 text-left transition-all border-l-4 ${
-                    activeView?.type === 'dm' && activeView.otherUid === u.uid
-                      ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
-                      : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
-                  }`}
-                >
-                  <div className="w-8 h-8 bg-brand-gold/20 flex items-center justify-center text-brand-blue-text font-display font-bold text-[10px]">
-                    {(u.displayName || u.email || '?')[0].toUpperCase()}
+              <div className="space-y-2">
+                {onlineDirectoryUsers.length > 0 && (
+                  <div className="px-2 pt-1">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-brand-green/80">Online agora</p>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs font-bold truncate">{u.displayName || u.email}</p>
-                    {(() => {
-                      const isOnline = isUserActuallyOnline(u);
-                      return (
-                    <div className="flex items-center gap-1.5">
-                      <span className={`h-1.5 w-1.5 rounded-full ${isOnline ? 'bg-brand-green' : 'bg-brand-blue-text/30'}`} />
-                      <p className={`text-[10px] font-bold tracking-tighter ${isOnline ? 'text-brand-green uppercase' : 'text-brand-blue-text/50'}`}>
-                        {isOnline ? 'online' : formatLastSeen(u)}
+                )}
+
+                {onlineDirectoryUsers.map((u) => (
+                  <button
+                    key={u.uid}
+                    onClick={() => {
+                      if (u.uid !== user?.uid) openDm(u);
+                    }}
+                    disabled={u.uid === user?.uid}
+                    className={`w-full flex items-center gap-3 px-3 py-3 text-left transition-all border-l-4 ${
+                      activeView?.type === 'dm' && activeView.otherUid === u.uid
+                        ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
+                        : u.uid === user?.uid
+                          ? 'border-transparent text-brand-blue-text/40 cursor-default bg-brand-blue/5'
+                          : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
+                    }`}
+                  >
+                    <div className="w-8 h-8 bg-brand-gold/20 flex items-center justify-center text-brand-blue-text font-display font-bold text-[10px]">
+                      {(u.displayName || u.email || '?')[0].toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <p className="text-xs font-bold truncate">{u.displayName || 'Servidor'}</p>
+                        {u.uid === user?.uid && <span className="shrink-0 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest bg-brand-gold/20 text-brand-blue-text">Você</span>}
+                      </div>
+                      <p className="text-[10px] text-brand-blue-text/50 truncate">{u.email}</p>
+                    </div>
+                    <ChevronRight size={12} className="opacity-40" />
+                  </button>
+                ))}
+
+                {offlineDirectoryUsers.length > 0 && onlineDirectoryUsers.length > 0 && (
+                  <div className="px-2 pt-2">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-brand-blue-text/35">Outros usuários</p>
+                  </div>
+                )}
+
+                {offlineDirectoryUsers.map((u) => (
+                  <button
+                    key={u.uid}
+                    onClick={() => {
+                      if (u.uid !== user?.uid) openDm(u);
+                    }}
+                    disabled={u.uid === user?.uid}
+                    className={`w-full flex items-center gap-3 px-3 py-3 text-left transition-all border-l-4 ${
+                      activeView?.type === 'dm' && activeView.otherUid === u.uid
+                        ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
+                        : u.uid === user?.uid
+                          ? 'border-transparent text-brand-blue-text/40 cursor-default bg-brand-blue/5'
+                          : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
+                    }`}
+                  >
+                    <div className="w-8 h-8 bg-brand-gold/20 flex items-center justify-center text-brand-blue-text font-display font-bold text-[10px]">
+                      {(u.displayName || u.email || '?')[0].toUpperCase()}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <p className="text-xs font-bold truncate">{u.displayName || 'Servidor'}</p>
+                        {u.uid === user?.uid && <span className="shrink-0 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest bg-brand-gold/20 text-brand-blue-text">Você</span>}
+                      </div>
+                      <p className="text-[10px] text-brand-blue-text/50 truncate">{u.email}</p>
+                      <p className="mt-1 text-[10px] font-bold tracking-tighter text-brand-blue-text/50">
+                        {formatLastSeen(u)}
                       </p>
                     </div>
-                      );
-                    })()}
-                  </div>
-                  <ChevronRight size={12} className="opacity-40" />
-                </button>
-              ))
+                    <ChevronRight size={12} className="opacity-40" />
+                  </button>
+                ))}
+              </div>
             )}
           </div>
         </aside>

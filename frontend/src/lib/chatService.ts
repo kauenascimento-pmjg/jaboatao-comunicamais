@@ -126,13 +126,24 @@ export function subscribeToUsers(callback: (users: UserProfile[]) => void) {
   });
 }
 
-export async function setUserPresence(uid: string, isOnline: boolean) {
+export async function setUserPresence(
+  uid: string,
+  isOnline: boolean,
+  profile?: {
+    displayName?: string;
+    email?: string;
+    photoURL?: string;
+  }
+) {
   if (!uid) return;
 
   try {
     await setDoc(doc(db, 'users', uid), {
       uid,
       isOnline,
+      ...(profile?.displayName && { displayName: profile.displayName }),
+      ...(profile?.email && { email: profile.email }),
+      ...(profile?.photoURL && { photoURL: profile.photoURL }),
       lastSeen: serverTimestamp(),
       updatedAt: serverTimestamp(),
     }, { merge: true });
