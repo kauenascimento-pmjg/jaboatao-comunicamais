@@ -11,7 +11,7 @@ import {
   confirmPasswordReset,
   AuthError
 } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { auth, getAuthActionUrl } from '@/lib/firebase';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { AlertCircle, Moon, Sun, Mail, ArrowRight, Loader2, Lock, Eye, EyeOff, Check, X } from 'lucide-react';
 import { useTheme } from '@/components/providers/ThemeProvider';
@@ -141,13 +141,13 @@ function LoginContent() {
     setNotice(null);
 
     const targetEmail = email.trim().toLowerCase();
+    const actionUrl = getAuthActionUrl('/login');
 
     try {
       console.log('[Auth] Attempting login for:', targetEmail);
       const userCredential = await signInWithEmailAndPassword(auth, targetEmail, password);
 
       if (!userCredential.user.emailVerified) {
-        const actionUrl = window.location.origin + '/login';
         await sendEmailVerification(userCredential.user, {
           url: actionUrl,
           handleCodeInApp: true,
@@ -168,10 +168,19 @@ function LoginContent() {
         setError('❌ E-mail ou senha inválidos.');
       } else if (authError.code === 'auth/too-many-requests') {
         setError('⏱️ Muitas tentativas de login. Tente novamente mais tarde.');
+      } else if (authError.code === 'auth/unauthorized-continue-uri') {
+        setError('❌ Domínio não autorizado para confirmação de e-mail. Contate o suporte.');
+      } else if (authError.code === 'auth/invalid-continue-uri') {
+        setError('❌ URL de confirmação inválida. Contate o suporte.');
       } else {
         setError('❌ Erro ao fazer login. Tente novamente.');
       }
-      console.error('[Auth] Login error:', err);
+      console.error('[Auth] Login error:', {
+        code: authError.code,
+        message: authError.message,
+        actionUrl,
+        err,
+      });
     } finally {
       setLoading(false);
     }
@@ -194,6 +203,7 @@ function LoginContent() {
     }
 
     const targetEmail = email.trim().toLowerCase();
+    const actionUrl = getAuthActionUrl('/login');
 
     setLoading(true);
     setError(null);
@@ -201,7 +211,6 @@ function LoginContent() {
 
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, targetEmail, password);
-      const actionUrl = window.location.origin + '/login';
 
       await sendEmailVerification(userCredential.user, {
         url: actionUrl,
@@ -226,10 +235,19 @@ function LoginContent() {
         setStep('login');
       } else if (authError.code === 'auth/weak-password') {
         setError('❌ A senha é muito fraca. Use uma combinação mais segura.');
+      } else if (authError.code === 'auth/unauthorized-continue-uri') {
+        setError('❌ Domínio não autorizado para confirmação de e-mail. Contate o suporte.');
+      } else if (authError.code === 'auth/invalid-continue-uri') {
+        setError('❌ URL de confirmação inválida. Contate o suporte.');
       } else {
         setError('❌ Erro ao criar conta. Tente novamente.');
       }
-      console.error('[Auth] Register error:', err);
+      console.error('[Auth] Register error:', {
+        code: authError.code,
+        message: authError.message,
+        actionUrl,
+        err,
+      });
     } finally {
       setLoading(false);
     }

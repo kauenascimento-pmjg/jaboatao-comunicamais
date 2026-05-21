@@ -27,5 +27,7 @@ env:
     value: "comunica-mais-jaboatao"
   - variable: NEXT_PUBLIC_BACKEND_URL
     value: "https://comunica-mais-jaboatao--pmjg-apps-hmol.us-central1.hosted.app"
+  - variable: NEXT_PUBLIC_APP_URL
+    value: "https://comunica-mais-jaboatao--pmjg-apps-hmol.us-central1.hosted.app"
   - variable: PYTHON_AUTH_API
     value: "http://10.224.0.65:80/auth/basic"

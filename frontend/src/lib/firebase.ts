@@ -20,3 +20,22 @@ export const auth = getAuth(app);
 export const db = getFirestore(app, process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID || 'comunica-mais');
 export const storage = getStorage(app);
 export const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
+
+/**
+ * Gera a URL de retorno usada pelo Firebase Auth (verify/reset links).
+ * Em produção, prioriza NEXT_PUBLIC_APP_URL para evitar domínio não autorizado.
+ */
+export const getAuthActionUrl = (path = '/login'): string => {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  const configuredBaseUrl = process.env.NEXT_PUBLIC_APP_URL?.trim().replace(/\/+$/, '');
+
+  if (configuredBaseUrl) {
+    return `${configuredBaseUrl}${normalizedPath}`;
+  }
+
+  if (typeof window !== 'undefined') {
+    return `${window.location.origin}${normalizedPath}`;
+  }
+
+  return `http://localhost:3000${normalizedPath}`;
+};

@@ -214,6 +214,8 @@
 
 - [ ] Testar todos os fluxos de autenticação
 - [ ] Verificar persistência em diferentes navegadores
+- [ ] Confirmar `Authorized domains` no Firebase Auth (`localhost` e domínio hospedado)
+- [ ] Validar `NEXT_PUBLIC_APP_URL` no ambiente de deploy
 - [ ] Validar links de email (desenvolvimento + produção)
 - [ ] Atualizar documentação interna
 - [ ] Treinar team no novo fluxo

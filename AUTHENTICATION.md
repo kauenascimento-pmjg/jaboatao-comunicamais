@@ -398,6 +398,38 @@ await signOut(auth);
 
 ---
 
+## 🌐 Configuração de Produção (Obrigatório)
+
+Para evitar o erro `auth/unauthorized-continue-uri` no cadastro/login, configure os domínios autorizados no Firebase Authentication.
+
+### 1. Domínios autorizados no Firebase Console
+
+1. Acesse o projeto `pmjg-apps-hmol` no Firebase Console
+2. Vá em Authentication > Settings > Authorized domains
+3. Confirme que estes domínios existem:
+  - `localhost`
+  - `comunica-mais-jaboatao--pmjg-apps-hmol.us-central1.hosted.app`
+
+Importante: adicione apenas o domínio (sem `https://` e sem caminho `/login`).
+
+### 2. URL canônica do frontend por ambiente
+
+No App Hosting, configure a variável pública:
+
+- `NEXT_PUBLIC_APP_URL=https://comunica-mais-jaboatao--pmjg-apps-hmol.us-central1.hosted.app`
+
+Essa variável é usada para gerar a URL de retorno dos links de verificação e recuperação com consistência em produção.
+
+### 3. Verificação após deploy
+
+1. Criar conta nova em produção
+2. Confirmar envio do e-mail de verificação
+3. Clicar no link e validar retorno para `/login`
+4. Fazer login com a conta confirmada
+5. Conferir ausência de 400 em `accounts:sendOobCode`
+
+---
+
 ## 🔗 Referências
 
 - [Firebase Auth Docs](https://firebase.google.com/docs/auth)
