@@ -1,5 +1,6 @@
-import { auth, db, storage, waitForAuthReady } from './firebase';
-import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs, updateDoc, arrayUnion, deleteField, deleteDoc } from 'firebase/firestore';
+import { auth, db, rtdb, storage, waitForAuthReady } from './firebase';
+import { doc, setDoc, getDoc, collection, onSnapshot, addDoc, serverTimestamp, getDocs, updateDoc, deleteDoc } from 'firebase/firestore';
+import { ref as rtdbRef, push, set, get, update, query as rtdbQuery, orderByChild, onValue } from 'firebase/database';
 import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot, StorageError } from 'firebase/storage';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
@@ -25,6 +26,28 @@ export type Message = {
   createdAt: { toDate: () => Date } | null;
   editedAt?: { toDate: () => Date } | null;
   deletedAt?: { toDate: () => Date } | null;
+};
+
+type MessageRecord = {
+  text: string;
+  senderName: string;
+  senderId: string;
+  replyTo?: {
+    id: string;
+    text: string;
+    senderName: string;
+  };
+  deliveredTo?: string[];
+  readBy?: string[];
+  isDeleted?: boolean;
+  channelId?: string;
+  dmId?: string;
+  fileUrl?: string | null;
+  fileType?: string | null;
+  fileName?: string | null;
+  createdAt?: number | null;
+  editedAt?: number | null;
+  deletedAt?: number | null;
 };
 
 export type Channel = {
@@ -53,6 +76,46 @@ export type UserProfile = {
 };
 
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
+
+const MESSAGE_ROOT = 'message_threads';
+
+function toDateWrapper(timestamp?: number | null) {
+  if (timestamp === null || timestamp === undefined) return null;
+  return { toDate: () => new Date(timestamp) };
+}
+
+function normalizeMessage(id: string, record: MessageRecord): Message {
+  return {
+    id,
+    text: record.text,
+    senderName: record.senderName,
+    senderId: record.senderId,
+    replyTo: record.replyTo,
+    deliveredTo: record.deliveredTo,
+    readBy: record.readBy,
+    isDeleted: record.isDeleted,
+    channelId: record.channelId,
+    dmId: record.dmId,
+    fileUrl: record.fileUrl || undefined,
+    fileType: record.fileType || undefined,
+    fileName: record.fileName || undefined,
+    createdAt: toDateWrapper(record.createdAt),
+    editedAt: toDateWrapper(record.editedAt),
+    deletedAt: toDateWrapper(record.deletedAt),
+  };
+}
+
+function getMessageThreadPath(scope: 'channels' | 'direct_messages', threadId: string) {
+  return `${MESSAGE_ROOT}/${scope}/${threadId}/messages`;
+}
+
+function sortMessages(messages: Message[]) {
+  return messages.sort((a, b) => {
+    const aTime = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+    const bTime = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+    return aTime - bTime;
+  });
+}
 
 /** Faz upload de um arquivo para o Firebase Storage com monitoramento */
 export async function uploadFile(file: File, folder: string = 'chat_files'): Promise<{ url: string; type: string; name: string }> {
@@ -211,14 +274,16 @@ export async function clearAllChannels() {
 }
 
 export function subscribeToMessages(channelId: string, callback: (messages: Message[]) => void) {
-  const q = query(
-    collection(db, `channels/${channelId}/messages`),
-    orderBy('createdAt', 'asc')
-  );
-  return onSnapshot(q, (snapshot) => {
-    const msgs: Message[] = [];
-    snapshot.forEach(d => msgs.push({ id: d.id, ...d.data() } as Message));
-    callback(msgs);
+  const messagesRef = rtdbQuery(rtdbRef(rtdb, getMessageThreadPath('channels', channelId)), orderByChild('createdAt'));
+  return onValue(messagesRef, (snapshot) => {
+    const raw = snapshot.val() as Record<string, MessageRecord> | null;
+    if (!raw) {
+      callback([]);
+      return;
+    }
+
+    const msgs = Object.entries(raw).map(([id, record]) => normalizeMessage(id, record));
+    callback(sortMessages(msgs));
   });
 }
 
@@ -230,7 +295,16 @@ export async function sendMessage(
   fileData?: { url: string; type: string; name: string },
   replyTo?: { id: string; text: string; senderName: string }
 ) {
-  await addDoc(collection(db, `channels/${channelId}/messages`), {
+  const currentUser = await waitForAuthReady();
+  if (!currentUser) {
+    throw new Error('Faça login novamente antes de enviar mensagens.');
+  }
+
+  const messagesRef = rtdbRef(rtdb, getMessageThreadPath('channels', channelId));
+  const messageRef = push(messagesRef);
+
+  await set(messageRef, {
+    id: messageRef.key,
     text,
     senderName,
     senderId,
@@ -241,19 +315,21 @@ export async function sendMessage(
       fileType: fileData.type,
       fileName: fileData.name
     }),
-    createdAt: serverTimestamp(),
+    createdAt: Date.now(),
+    editedAt: null,
+    deletedAt: null,
   });
 }
 
 export async function deleteChannelMessage(channelId: string, messageId: string) {
   try {
-    await updateDoc(doc(db, 'channels', channelId, 'messages', messageId), {
+    await update(rtdbRef(rtdb, `${getMessageThreadPath('channels', channelId)}/${messageId}`), {
       isDeleted: true,
       text: 'Mensagem excluída',
-      fileUrl: deleteField(),
-      fileType: deleteField(),
-      fileName: deleteField(),
-      deletedAt: serverTimestamp(),
+      fileUrl: null,
+      fileType: null,
+      fileName: null,
+      deletedAt: Date.now(),
     });
   } catch (error) {
     console.error('Error deleting channel message:', error);
@@ -263,9 +339,9 @@ export async function deleteChannelMessage(channelId: string, messageId: string)
 
 export async function updateChannelMessage(channelId: string, messageId: string, text: string) {
   try {
-    await updateDoc(doc(db, 'channels', channelId, 'messages', messageId), {
+    await update(rtdbRef(rtdb, `${getMessageThreadPath('channels', channelId)}/${messageId}`), {
       text,
-      editedAt: serverTimestamp(),
+      editedAt: Date.now(),
     });
   } catch (error) {
     console.error('Error updating channel message:', error);
@@ -275,13 +351,13 @@ export async function updateChannelMessage(channelId: string, messageId: string,
 
 export async function deleteDmMessage(dmId: string, messageId: string) {
   try {
-    await updateDoc(doc(db, 'direct_messages', dmId, 'messages', messageId), {
+    await update(rtdbRef(rtdb, `${getMessageThreadPath('direct_messages', dmId)}/${messageId}`), {
       isDeleted: true,
       text: 'Mensagem excluída',
-      fileUrl: deleteField(),
-      fileType: deleteField(),
-      fileName: deleteField(),
-      deletedAt: serverTimestamp(),
+      fileUrl: null,
+      fileType: null,
+      fileName: null,
+      deletedAt: Date.now(),
     });
   } catch (error) {
     console.error('Error deleting dm message:', error);
@@ -291,9 +367,9 @@ export async function deleteDmMessage(dmId: string, messageId: string) {
 
 export async function updateDmMessage(dmId: string, messageId: string, text: string) {
   try {
-    await updateDoc(doc(db, 'direct_messages', dmId, 'messages', messageId), {
+    await update(rtdbRef(rtdb, `${getMessageThreadPath('direct_messages', dmId)}/${messageId}`), {
       text,
-      editedAt: serverTimestamp(),
+      editedAt: Date.now(),
     });
   } catch (error) {
     console.error('Error updating dm message:', error);
@@ -370,14 +446,16 @@ export async function getOrCreateDm(uid1: string, uid2: string): Promise<string>
 }
 
 export function subscribeToDmMessages(dmId: string, callback: (messages: Message[]) => void) {
-  const q = query(
-    collection(db, `direct_messages/${dmId}/messages`),
-    orderBy('createdAt', 'asc')
-  );
-  return onSnapshot(q, (snapshot) => {
-    const msgs: Message[] = [];
-    snapshot.forEach(d => msgs.push({ id: d.id, ...d.data() } as Message));
-    callback(msgs);
+  const messagesRef = rtdbQuery(rtdbRef(rtdb, getMessageThreadPath('direct_messages', dmId)), orderByChild('createdAt'));
+  return onValue(messagesRef, (snapshot) => {
+    const raw = snapshot.val() as Record<string, MessageRecord> | null;
+    if (!raw) {
+      callback([]);
+      return;
+    }
+
+    const msgs = Object.entries(raw).map(([id, record]) => normalizeMessage(id, record));
+    callback(sortMessages(msgs));
   });
 }
 
@@ -389,7 +467,16 @@ export async function sendDmMessage(
   fileData?: { url: string; type: string; name: string },
   replyTo?: { id: string; text: string; senderName: string }
 ) {
-  await addDoc(collection(db, `direct_messages/${dmId}/messages`), {
+  const currentUser = await waitForAuthReady();
+  if (!currentUser) {
+    throw new Error('Faça login novamente antes de enviar mensagens.');
+  }
+
+  const messagesRef = rtdbRef(rtdb, getMessageThreadPath('direct_messages', dmId));
+  const messageRef = push(messagesRef);
+
+  await set(messageRef, {
+    id: messageRef.key,
     text,
     senderName,
     senderId,
@@ -402,7 +489,9 @@ export async function sendDmMessage(
       fileType: fileData.type,
       fileName: fileData.name
     }),
-    createdAt: serverTimestamp(),
+    createdAt: Date.now(),
+    editedAt: null,
+    deletedAt: null,
   });
 }
 
@@ -417,10 +506,19 @@ export async function updateDmMessagesStatus(
   const fieldName = status === 'read' ? 'readBy' : 'deliveredTo';
 
   await Promise.all(
-    messageIds.map((messageId) =>
-      updateDoc(doc(db, 'direct_messages', dmId, 'messages', messageId), {
-        [fieldName]: arrayUnion(userId),
-      })
-    )
+    messageIds.map(async (messageId) => {
+      const messageRef = rtdbRef(rtdb, `${getMessageThreadPath('direct_messages', dmId)}/${messageId}`);
+      const snapshot = await get(messageRef);
+
+      if (!snapshot.exists()) return;
+
+      const record = snapshot.val() as MessageRecord;
+      const currentUsers = (record[fieldName as 'readBy' | 'deliveredTo'] ?? []) as string[];
+      const nextUsers = Array.from(new Set([...currentUsers, userId]));
+
+      await update(messageRef, {
+        [fieldName]: nextUsers,
+      });
+    })
   );
 }

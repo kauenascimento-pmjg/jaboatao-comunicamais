@@ -1005,12 +1005,11 @@ export default function ChatPage() {
                               onClick={() => openMediaPreview(msg.fileUrl!, msg.fileType || 'image/*', msg.fileName || 'Imagem')}
                               className="block w-full text-left"
                             >
-                              <Image 
-                                src={msg.fileUrl} 
-                                alt={msg.fileName || 'Imagem'} 
-                                width={400}
-                                height={300}
-                                className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90 transition-opacity" 
+                              <Image
+                                src={msg.fileUrl}
+                                alt={msg.fileName || 'Imagem'}
+                                loading="lazy"
+                                className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90 transition-opacity"
                               />
                             </button>
                           ) : msg.fileType?.startsWith('video/') ? (
