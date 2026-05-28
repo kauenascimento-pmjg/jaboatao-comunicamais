@@ -1,4 +1,4 @@
-import { db, storage } from './firebase';
+import { auth, db, storage, waitForAuthReady } from './firebase';
 import { doc, setDoc, getDoc, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, getDocs, updateDoc, arrayUnion, deleteField, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytesResumable, getDownloadURL, UploadTaskSnapshot, StorageError } from 'firebase/storage';
 
@@ -58,6 +58,16 @@ export type UserProfile = {
 export async function uploadFile(file: File, folder: string = 'chat_files'): Promise<{ url: string; type: string; name: string }> {
   return new Promise((resolve, reject) => {
     try {
+      void (async () => {
+        const currentUser = await waitForAuthReady();
+        if (!currentUser) {
+          throw new Error('Faça login novamente antes de enviar arquivos.');
+        }
+
+        if (!auth.currentUser) {
+          throw new Error('Sessão do Firebase ainda não foi restaurada. Tente novamente em alguns segundos.');
+        }
+
       const timestamp = Date.now();
       const storageRef = ref(storage, `${folder}/${timestamp}_${file.name}`);
       const uploadTask = uploadBytesResumable(storageRef, file);
@@ -92,6 +102,9 @@ export async function uploadFile(file: File, folder: string = 'chat_files'): Pro
           });
         }
       );
+      })().catch((error: unknown) => {
+        reject(error);
+      });
     } catch (error) {
       console.error('Error in uploadFile initialization:', error);
       reject(error);

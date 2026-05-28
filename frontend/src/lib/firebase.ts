@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { getAuth, onAuthStateChanged, type User } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { getAnalytics } from 'firebase/analytics';
@@ -20,6 +20,22 @@ export const auth = getAuth(app);
 export const db = getFirestore(app, process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID || 'comunica-mais');
 export const storage = getStorage(app);
 export const analytics = typeof window !== 'undefined' ? getAnalytics(app) : null;
+
+/**
+ * Aguarda o Firebase Auth restaurar a sessão atual antes de operações que dependem do token.
+ */
+export const waitForAuthReady = (): Promise<User | null> => {
+  if (auth.currentUser !== null) {
+    return Promise.resolve(auth.currentUser);
+  }
+
+  return new Promise((resolve) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      unsubscribe();
+      resolve(user);
+    });
+  });
+};
 
 /**
  * Gera a URL de retorno usada pelo Firebase Auth (verify/reset links).
