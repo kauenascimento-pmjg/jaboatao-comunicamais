@@ -54,6 +54,7 @@ export default function ChatPage() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [mediaPreview, setMediaPreview] = useState<{ url: string; type: string; name: string } | null>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -419,6 +420,19 @@ export default function ChatPage() {
     }
   };
 
+  const openMediaPreview = (url: string, type: string, name: string) => {
+    setMediaPreview({ url, type, name });
+  };
+
+  const closeMediaPreview = () => {
+    setMediaPreview(null);
+  };
+
+  const isPreviewableDocument = (fileType?: string) => {
+    if (!fileType) return false;
+    return fileType.startsWith('application/pdf') || fileType.startsWith('text/') || fileType.includes('officedocument');
+  };
+
   const sendUploadedFile = useCallback(async (file: File) => {
     if (!activeView || !user) return;
 
@@ -572,6 +586,26 @@ export default function ChatPage() {
     return `visto em ${dateStr} às ${timeStr}`;
   }
 
+  function formatMessageSentAt(msg: Message) {
+    const sentDate = msg.createdAt?.toDate ? msg.createdAt.toDate() : null;
+    if (!sentDate) return '';
+
+    const now = new Date();
+    const isToday = sentDate.toDateString() === now.toDateString();
+
+    const yesterday = new Date();
+    yesterday.setDate(now.getDate() - 1);
+    const isYesterday = sentDate.toDateString() === yesterday.toDateString();
+
+    const timeStr = sentDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    if (isToday) return `Hoje às ${timeStr}`;
+    if (isYesterday) return `Ontem às ${timeStr}`;
+
+    const dateStr = sentDate.toLocaleDateString([], { day: '2-digit', month: '2-digit' });
+    return `${dateStr} às ${timeStr}`;
+  }
+
   const directoryUsers = [...users]
     .sort((a, b) => {
       const aOnline = isUserActuallyOnline(a);
@@ -590,8 +624,11 @@ export default function ChatPage() {
     u.displayName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
     u.email?.toLowerCase().includes(searchQuery.toLowerCase())
   );
-  const onlineDirectoryUsers = filteredUsers.filter((userProfile) => isUserActuallyOnline(userProfile));
-  const offlineDirectoryUsers = filteredUsers.filter((userProfile) => !isUserActuallyOnline(userProfile));
+  const visibleUsers = filteredUsers.filter((userProfile) => userProfile.uid !== user?.uid);
+  const onlineDirectoryUsers = visibleUsers.filter((userProfile) => isUserActuallyOnline(userProfile));
+  const offlineDirectoryUsers = visibleUsers.filter((userProfile) => !isUserActuallyOnline(userProfile));
+
+  const getPresenceLabel = (userProfile: UserProfile) => (isUserActuallyOnline(userProfile) ? 'Online agora' : formatLastSeen(userProfile));
 
   const subtleTextClass = theme === 'dark' ? 'text-white/70' : 'text-brand-blue-text/60';
   const checkDefaultClass = theme === 'dark' ? 'text-white/70' : 'text-brand-blue-text/60';
@@ -604,10 +641,10 @@ export default function ChatPage() {
   };
 
   const renderMessageStatus = (msg: Message, isMine: boolean) => {
-    const time = msg.createdAt?.toDate ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    const sentAt = formatMessageSentAt(msg);
 
     if (!isMine || activeView?.type !== 'dm') {
-      return <span className={`text-[8px] font-bold uppercase ${subtleTextClass}`}>{time}</span>;
+      return <span className={`text-[8px] font-bold uppercase ${subtleTextClass}`}>{sentAt}</span>;
     }
 
     const otherUid = activeView.otherUid;
@@ -616,7 +653,7 @@ export default function ChatPage() {
 
     return (
       <div className="flex items-center gap-1">
-        <span className={`text-[8px] font-bold uppercase ${subtleTextClass}`}>{time}</span>
+        <span className={`text-[8px] font-bold uppercase ${subtleTextClass}`}>{sentAt}</span>
         {isRead ? (
           <CheckCheck size={12} className="text-sky-500" aria-label="Visualizada" />
         ) : isDelivered ? (
@@ -756,8 +793,8 @@ export default function ChatPage() {
             </div>
             {sidePanel === 'directory' && (
               <div className="mt-3 flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-widest text-brand-blue-text/50 px-1">
-                <span>Usuários que acessaram o sistema</span>
-                <span>{filteredUsers.length} encontrados</span>
+                <span>Servidores</span>
+                <span>{visibleUsers.length} encontrados</span>
               </div>
             )}
           </div>
@@ -814,7 +851,7 @@ export default function ChatPage() {
                     </div>
                   </div>
                 ))
-            ) : filteredUsers.length === 0 ? (
+            ) : visibleUsers.length === 0 ? (
               <div className="px-3 py-10 text-center text-brand-blue-text/40">
                 <Users size={28} className="mx-auto mb-3 opacity-30" />
                 <p className="text-xs font-bold uppercase tracking-widest">Nenhum usuário encontrado</p>
@@ -823,10 +860,15 @@ export default function ChatPage() {
                 </p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 {onlineDirectoryUsers.length > 0 && (
                   <div className="px-2 pt-1">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-brand-green/80">Online agora</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-brand-green/80">Online agora</p>
+                      <span className="rounded-full bg-brand-green/10 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-brand-green">
+                        {onlineDirectoryUsers.length}
+                      </span>
+                    </div>
                   </div>
                 )}
 
@@ -840,18 +882,16 @@ export default function ChatPage() {
                     className={`w-full flex items-center gap-3 px-3 py-3 text-left transition-all border-l-4 ${
                       activeView?.type === 'dm' && activeView.otherUid === u.uid
                         ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
-                        : u.uid === user?.uid
-                          ? 'border-transparent text-brand-blue-text/40 cursor-default bg-brand-blue/5'
-                          : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
+                        : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
                     }`}
                   >
-                    <div className="w-8 h-8 bg-brand-gold/20 flex items-center justify-center text-brand-blue-text font-display font-bold text-[10px]">
+                    <div className="relative w-8 h-8 bg-brand-gold/20 flex items-center justify-center text-brand-blue-text font-display font-bold text-[10px]">
                       {(u.displayName || u.email || '?')[0].toUpperCase()}
+                      <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--surface)] bg-brand-green shadow-sm" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
                         <p className="text-xs font-bold truncate">{u.displayName || 'Servidor'}</p>
-                        {u.uid === user?.uid && <span className="shrink-0 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest bg-brand-gold/20 text-brand-blue-text">Você</span>}
                       </div>
                       <p className="text-[10px] text-brand-blue-text/50 truncate">{u.email}</p>
                     </div>
@@ -861,7 +901,12 @@ export default function ChatPage() {
 
                 {offlineDirectoryUsers.length > 0 && onlineDirectoryUsers.length > 0 && (
                   <div className="px-2 pt-2">
-                    <p className="text-[10px] font-bold uppercase tracking-widest text-brand-blue-text/35">Outros usuários</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-brand-blue-text/35">Offline</p>
+                      <span className="rounded-full bg-brand-blue/5 px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest text-brand-blue-text/45">
+                        {offlineDirectoryUsers.length}
+                      </span>
+                    </div>
                   </div>
                 )}
 
@@ -875,22 +920,20 @@ export default function ChatPage() {
                     className={`w-full flex items-center gap-3 px-3 py-3 text-left transition-all border-l-4 ${
                       activeView?.type === 'dm' && activeView.otherUid === u.uid
                         ? 'bg-brand-blue/5 border-brand-blue text-brand-blue-text font-bold shadow-sm'
-                        : u.uid === user?.uid
-                          ? 'border-transparent text-brand-blue-text/40 cursor-default bg-brand-blue/5'
-                          : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
+                        : 'border-transparent text-brand-blue-text/60 hover:bg-brand-blue/5 hover:border-brand-blue/20'
                     }`}
                   >
-                    <div className="w-8 h-8 bg-brand-gold/20 flex items-center justify-center text-brand-blue-text font-display font-bold text-[10px]">
+                    <div className="relative w-8 h-8 bg-brand-gold/20 flex items-center justify-center text-brand-blue-text font-display font-bold text-[10px]">
                       {(u.displayName || u.email || '?')[0].toUpperCase()}
+                      <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--surface)] bg-brand-blue/25 shadow-sm" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
                         <p className="text-xs font-bold truncate">{u.displayName || 'Servidor'}</p>
-                        {u.uid === user?.uid && <span className="shrink-0 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-widest bg-brand-gold/20 text-brand-blue-text">Você</span>}
                       </div>
                       <p className="text-[10px] text-brand-blue-text/50 truncate">{u.email}</p>
                       <p className="mt-1 text-[10px] font-bold tracking-tighter text-brand-blue-text/50">
-                        {formatLastSeen(u)}
+                        {getPresenceLabel(u)}
                       </p>
                     </div>
                     <ChevronRight size={12} className="opacity-40" />
@@ -942,40 +985,70 @@ export default function ChatPage() {
                         ? 'bg-brand-blue text-white shadow-brand-gold' 
                         : 'bg-[var(--bg)] border-2 border-brand-blue/20 text-brand-blue-text shadow-brand-blue/5'}
                     `}>
+                      {msg.replyTo && !isDeleted && (
+                        <div className={`mb-3 rounded border-l-4 pl-3 py-2 ${isMine ? 'bg-white/10 border-white/50' : 'bg-brand-blue/5 border-brand-gold/80'}`}>
+                          <p className={`text-[9px] font-bold uppercase tracking-widest ${isMine ? 'text-white/80' : 'text-brand-blue-text/60'}`}>
+                            Resposta para {msg.replyTo.senderName}
+                          </p>
+                          <p className={`mt-1 text-[11px] leading-snug ${isMine ? 'text-white/80' : 'text-brand-blue-text/70'} line-clamp-3`}>
+                            {msg.replyTo.text}
+                          </p>
+                        </div>
+                      )}
+
                       {/* Renderização de Media */}
                       {!isDeleted && msg.fileUrl && (
                         <div className="mb-3 rounded overflow-hidden bg-black/5 dark:bg-white/5 p-1 max-w-sm">
                           {msg.fileType?.startsWith('image/') ? (
-                            <Image 
-                              src={msg.fileUrl} 
-                              alt={msg.fileName || 'Imagem'} 
-                              width={400}
-                              height={300}
-                              className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90" 
-                              onClick={() => window.open(msg.fileUrl, '_blank')} 
-                            />
+                            <button
+                              type="button"
+                              onClick={() => openMediaPreview(msg.fileUrl!, msg.fileType || 'image/*', msg.fileName || 'Imagem')}
+                              className="block w-full text-left"
+                            >
+                              <Image 
+                                src={msg.fileUrl} 
+                                alt={msg.fileName || 'Imagem'} 
+                                width={400}
+                                height={300}
+                                className="max-w-full h-auto rounded block cursor-pointer hover:opacity-90 transition-opacity" 
+                              />
+                            </button>
                           ) : msg.fileType?.startsWith('video/') ? (
                             <video src={msg.fileUrl} controls className="max-w-full rounded" />
-                          ) : (
-                            <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 p-3 bg-brand-blue/5 hover:bg-brand-blue/10 transition-colors rounded">
-                              <FileText size={24} className="text-brand-blue" />
+                          ) : isPreviewableDocument(msg.fileType) ? (
+                            <button
+                              type="button"
+                              onClick={() => openMediaPreview(msg.fileUrl!, msg.fileType || 'application/octet-stream', msg.fileName || 'Documento')}
+                              className="w-full flex items-center gap-3 p-3 bg-brand-blue/5 hover:bg-brand-blue/10 transition-colors rounded text-left"
+                            >
+                              <div className="w-10 h-10 rounded-lg bg-brand-blue/10 flex items-center justify-center shrink-0">
+                                <FileText size={20} className="text-brand-blue" />
+                              </div>
                               <div className="flex-1 min-w-0">
                                 <p className="text-xs font-bold truncate">{msg.fileName}</p>
-                                <p className="text-[9px] uppercase tracking-tighter opacity-60 italic text-brand-blue">Baixar anexo</p>
+                                <p className="text-[9px] uppercase tracking-tighter opacity-60 italic text-brand-blue">Abrir documento</p>
                               </div>
-                            </a>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => openMediaPreview(msg.fileUrl!, msg.fileType || 'application/octet-stream', msg.fileName || 'Arquivo')}
+                              className="w-full flex items-center gap-3 p-3 bg-brand-blue/5 hover:bg-brand-blue/10 transition-colors rounded text-left"
+                            >
+                              <div className="w-10 h-10 rounded-lg bg-brand-blue/10 flex items-center justify-center shrink-0">
+                                <FileText size={20} className="text-brand-blue" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-bold truncate">{msg.fileName}</p>
+                                <p className="text-[9px] uppercase tracking-tighter opacity-60 italic text-brand-blue">Visualizar anexo</p>
+                              </div>
+                            </button>
                           )}
                         </div>
                       )}
                       <p className={`font-sans text-sm leading-relaxed whitespace-pre-wrap ${isDeleted ? 'italic opacity-80' : ''}`}>
                         {isDeleted ? 'Mensagem excluída' : msg.text}
                       </p>
-                      {msg.replyTo && !isDeleted && (
-                        <div className="mt-2 border-l-2 border-brand-gold/70 pl-2 py-1 bg-black/5">
-                          <p className="text-[10px] font-bold uppercase opacity-70">Resposta para {msg.replyTo.senderName}</p>
-                          <p className="text-[11px] opacity-80 truncate">{msg.replyTo.text}</p>
-                        </div>
-                      )}
                       {isEdited && (
                         <p className={`mt-1 text-[10px] italic ${subtleTextClass}`}>mensagem editada</p>
                       )}
@@ -1207,6 +1280,58 @@ export default function ChatPage() {
               >
                 Excluir canal
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mediaPreview && (
+        <div className="fixed inset-0 z-[90] bg-brand-blue/60 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="relative w-full max-w-6xl h-[88vh] bg-[var(--surface)] border-2 border-brand-blue shadow-brutal-md shadow-brand-gold overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-brand-blue/10 bg-[var(--bg)]/60 shrink-0">
+              <div className="min-w-0">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-brand-blue-text/50">Visualização</p>
+                <p className="text-sm font-bold text-brand-blue-text truncate">{mediaPreview.name}</p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <a
+                  href={mediaPreview.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="px-3 py-2 text-xs font-bold border border-brand-blue/20 text-brand-blue-text hover:bg-brand-blue/5"
+                >
+                  Abrir em nova aba
+                </a>
+                <button
+                  type="button"
+                  onClick={closeMediaPreview}
+                  className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-brand-blue/5 text-brand-blue-text"
+                  aria-label="Fechar visualização"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-auto bg-[var(--bg)]/70 p-4 lg:p-6">
+              {mediaPreview.type.startsWith('image/') ? (
+                <div className="h-full min-h-full flex items-center justify-center">
+                  <Image
+                    src={mediaPreview.url}
+                    alt={mediaPreview.name}
+                    width={1600}
+                    height={1200}
+                    className="max-h-full w-auto max-w-full object-contain rounded-lg shadow-brutal-sm shadow-brand-blue/10"
+                    priority
+                  />
+                </div>
+              ) : (
+                <iframe
+                  src={mediaPreview.url}
+                  title={mediaPreview.name}
+                  className="w-full h-full min-h-[70vh] border-0 rounded-lg bg-white shadow-brutal-sm shadow-brand-blue/10"
+                />
+              )}
             </div>
           </div>
         </div>
